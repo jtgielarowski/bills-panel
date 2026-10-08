@@ -36,7 +36,7 @@ function paneToday() {
       const done = r.Remaining <= 0, st = status(r);
       return `<li class="${done ? "done" : ""}">
         <div class="p-li-main"><div class="pl-name">${esc(r.Bill)}</div>
-          <div class="pl-note"><span class="pill ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span></div></div>
+          <div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span></div></div>
         <div class="p-li-side"><div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
           ${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
                  : `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`}</div>
@@ -110,7 +110,7 @@ function paneBills() {
     const st = status(r), open = state.openRow === r.RowID;
     html += `<li class="p-bill ${open ? "open" : ""}">
       <button class="p-bill-btn" ${st.c === "info" ? `data-act="go-pane" data-pane="friday"` : `data-act="open-row" data-id="${esc(r.RowID)}"`} aria-expanded="${open}">
-        <span class="pill ${st.c}">${esc(st.t)}</span>
+        <span class="pill st ${st.c}">${esc(st.t)}</span>
         <span class="p-bill-name">${esc(r.Bill)}<small>${r["Paid date"] ? `🔒 Paid ${shortD(r["Paid date"])} · ${open ? "unlocked" : "tap to unlock"}` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
         <span class="money">${money(r["Paid date"] ? r["Paid total"] : r.Amount)}</span>
       </button>
@@ -119,6 +119,7 @@ function paneBills() {
   }
   return `<div class="p-monthnav"><button class="icon-btn" data-act="prev-month" aria-label="Previous month">‹</button><b>${monthName(vm)}</b><button class="icon-btn" data-act="next-month" aria-label="Next month">›</button></div>
     <div class="seg p-seg" role="group" aria-label="Show">${[["todo", "To pay"], ["paid", "Paid"], ["all", "All"]].map(([k, l]) => `<button data-act="filter" data-f="${k}" aria-pressed="${state.billFilter === k}">${l} <span class="hint">${counts[k]}</span></button>`).join("")}</div>
+    ${statusKey()}
     <ul class="p-bills">${html || `<li class="empty">${state.billFilter === "todo" ? "Everything this month is paid. 🎉" : "Nothing here."}</li>`}</ul>`;
 }
 

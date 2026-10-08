@@ -17,13 +17,16 @@ function monthBar(extra = "") {
   const fails = +META.checksFailing || 0;
   const n = paydaysIn(state.vm).length;
   return `<section class="monthbar">
-    <div class="month-nav">
-      <button class="icon-btn" data-act="prev-month" aria-label="Previous month">‹</button>
-      <h1>${monthName(state.vm)}</h1>
-      <button class="icon-btn" data-act="next-month" aria-label="Next month">›</button>
+    <div class="month-title">
+      <span class="eyebrow-top">Bills &amp; Paychecks</span>
+      <div class="month-nav">
+        <button class="icon-btn" data-act="prev-month" aria-label="Previous month">‹</button>
+        <h1>${monthName(state.vm)}</h1>
+        <button class="icon-btn" data-act="next-month" aria-label="Next month">›</button>
+      </div>
+      <div class="today">Today is ${fmtD(META.asOf, { weekday: "long", month: "long", day: "numeric" })} · ${n} payday${n === 1 ? "" : "s"} this month${extra}</div>
     </div>
-    <div class="today">Today is ${fmtD(META.asOf, { weekday: "long", month: "long", day: "numeric" })} · ${n} payday${n === 1 ? "" : "s"} this month${extra}</div>
-    <button class="health ${fails ? "bad" : ""}" data-act="go-details"><span class="dot"></span>${fails ? `${fails} model check${fails === 1 ? "" : "s"} need attention` : "All model checks passed"}</button>
+    <button class="health ${fails ? "bad" : ""}" data-act="go-details"><span class="dot"></span>${fails ? `${fails} model check${fails === 1 ? "" : "s"} need attention` : "Model health: all checks passed"}</button>
   </section>${keyLine()}`;
 }
 
@@ -40,11 +43,11 @@ function viewMonth() {
   ${monthBar()}
   <section class="today-grid">
     <div class="card payday">
-      <div class="payday-head"><h2>Pay from this payday · ${fmtD(cur)}</h2><span>${payRows.filter(r => r.Remaining > 0).length} to pay</span></div>
+      <div class="payday-head"><h2>Pay this Friday · ${fmtD(cur, { month: "short", day: "numeric" })}</h2><span>${payRows.filter(r => r.Remaining > 0).length} to pay</span></div>
       ${payRows.length ? `<ul class="payday-list">${payRows.map(r => {
         const done = r.Remaining <= 0, st = status(r);
         return `<li class="${done ? "done" : ""}">
-          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
+          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
           <div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
           <div>${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>` :
             `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`}</div>
@@ -109,7 +112,7 @@ function slot(p) {
     : after < META.cushion ? ["short", `Short by ${money(META.cushion - after, 0)}`] : ["", `OK · ${money(after - META.cushion, 0)} above cushion`];
   const nBills = pl ? reg().filter(r => r["Planned date"] === p.date && r.Remaining > 0).length : null;
   return `<div class="slot">
-    <div class="slot-head"><b>${fmtD(p.date)}</b><span class="who ${who}">${esc(peopleLabel(p.people))}</span></div>
+    <div class="slot-head ${who}"><b>${fmtD(p.date)}</b><span class="who ${who}">${esc(peopleLabel(p.people))}</span></div>
     <table><thead><tr><th></th><th>Plan</th><th>Actual</th></tr></thead><tbody>
       <tr><td>Starting cash</td><td>${pl ? money(start) : "—"}</td><td>—</td></tr>
       <tr><td>+ Paycheck</td><td>${money(p.amount)}</td><td>${received ? money(p.amount) : "—"}</td></tr>
@@ -132,7 +135,7 @@ function billTable(vm) {
     const flag = r.Source === "Debt" && (debtsById[r.ItemID] || {}).Flag === "Unexpected balance";
     const open = state.openRow === r.RowID;
     html += `<tr>
-      <td><span class="pill ${st.c}">${esc(st.t)}</span>${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
+      <td><span class="pill st ${st.c}">${esc(st.t)}</span>${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
       <td><div class="b-name">${esc(r.Bill)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
       <td>${shortD(r["Due date"])}${r.Rule === "End of service month" ? `<div class="b-detail">pay by ${shortD(r["Pay by"])}</div>` : ""}</td>
       <td class="r money">${money(r.Amount)}</td>
@@ -148,6 +151,7 @@ function billTable(vm) {
   }
   return `<section class="card card-pad">
     <div class="card-head"><h2>Bills for ${monthName(vm)}</h2><span class="hint">${rows.length} bills · sorted by group, then due date. Cards appear only when they have a balance.</span></div>
+    ${statusKey()}<div style="height:10px"></div>
     <div class="table-wrap"><table class="bills">
       <thead><tr><th>Status</th><th>Bill</th><th>Due</th><th class="r">Amount</th><th>Pay from</th><th class="detail-only">Why this payday</th><th class="detail-only">Planner</th><th>Cash month</th><th>Paid</th><th class="r"><span class="sr">Action</span></th></tr></thead>
       <tbody>${html || `<tr><td colspan="12" class="empty">No bills this month.</td></tr>`}</tbody>
@@ -299,7 +303,7 @@ function viewBudget() {
       <td class="r money">${c["Variance on paid bills"] ? (c["Variance on paid bills"] > 0 ? "+" : "") + money(c["Variance on paid bills"]) : "—"}</td></tr>`).join("")}
     </tbody></table></div>
     ${sel ? `<h3 style="margin:18px 0 8px;font-size:15px">${esc(sel)} · bills</h3><div class="table-wrap"><table class="data"><thead><tr><th>Bill</th><th>Status</th><th class="r">Budget</th><th class="r">Paid</th><th class="r">Difference</th><th>Reason</th></tr></thead><tbody>
-      ${drill.map(r => { const st = status(r); return `<tr><td>${esc(r.Bill)}<div class="hint">${esc(r.Detail || "")}</div></td><td><span class="pill ${st.c}">${esc(st.t)}</span></td><td class="r money">${money(r.Budget)}</td><td class="r money">${r["Paid total"] ? money(r["Paid total"]) : "—"}</td><td class="r money">${r.Variance === null || r.Variance === undefined ? "—" : (r.Variance > 0 ? "+" : "") + money(r.Variance)}</td><td>${esc(r["Reason if different"] || (r["Needs reason"] === true ? "Needs a reason" : ""))}</td></tr>`; }).join("")}
+      ${drill.map(r => { const st = status(r); return `<tr><td>${esc(r.Bill)}<div class="hint">${esc(r.Detail || "")}</div></td><td><span class="pill st ${st.c}">${esc(st.t)}</span></td><td class="r money">${money(r.Budget)}</td><td class="r money">${r["Paid total"] ? money(r["Paid total"]) : "—"}</td><td class="r money">${r.Variance === null || r.Variance === undefined ? "—" : (r.Variance > 0 ? "+" : "") + money(r.Variance)}</td><td>${esc(r["Reason if different"] || (r["Needs reason"] === true ? "Needs a reason" : ""))}</td></tr>`; }).join("")}
     </tbody></table></div>` : ""}
   </section>
   <section class="card card-pad">

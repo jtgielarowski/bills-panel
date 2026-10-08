@@ -1,57 +1,34 @@
 /* Layout: app bar with tabs → one working view at a time. "This month" leads with today's job (what to pay),
    then the numbers, the paycheck plan, the cash-build chart and the full bill list. Cards are white on a green-grey ledger ground. */
 :root {
-  --bg: #f2f4f0; --surface: #ffffff; --surface-2: #f7f8f5; --line: #dadfd8; --line-soft: #eceeea;
-  --ink: #1b211e; --ink-2: #47524c; --ink-3: #66716b;
-  --accent: #1f5c45; --accent-ink: #ffffff; --accent-soft: #e2efe7; --bar: #17201c; --bar-ink: #cfe0d6;
-  --input: #fff6d1; --input-line: #c9a227;
-  --series-1: #2a78d6; --series-2: #1baf7a; --neutral-mark: #c6ccc6;
-  --good-bg: #dcefe3; --good-ink: #1b5e3a;
-  --late-bg: #8b1e1e; --late-ink: #ffffff;
-  --red-bg: #f6c6c6; --red-ink: #5c0f0f;
-  --orange-bg: #ffd8b0; --orange-ink: #5a2d00;
-  --yellow-bg: #fdeea6; --yellow-ink: #4a3b00;
-  --info-bg: #dcebf5; --info-ink: #1f3f57;
+  /* One light look, matched to the This Month mockup: white cards on a pale green-grey page,
+     a charcoal tab bar, green for "do this", blue = John's money, amber = Stephanie's money. */
+  color-scheme: light;
+  --bg: #f4f5f2; --surface: #ffffff; --surface-2: #f7f8f5; --line: #dadddb; --line-soft: #eceeea;
+  --ink: #1d2320; --ink-2: #47524c; --ink-3: #5b6660;
+  --accent: #2e8b57; --accent-ink: #ffffff; --accent-soft: #e5f3ea; --accent-deep: #1e5a38; --bar: #1f2a25; --bar-ink: #cfe6d7;
+  --input: #fff6d1; --input-line: #d9c27a;
+  --series-1: #2a6f9e; --series-2: #e3a04a; --series-1-head: #2a6f9e; --series-2-head: #9e6418; --neutral-mark: #c9cec9;
+  --good-bg: #e5f3ea; --good-ink: #1e5a38;
+  /* Due-date status scale (escalating severity; every step also has an icon + words) */
+  --st-paid-bg: #e4f4e4; --st-paid-ink: #146c14; --st-paid-line: #0ca30c;
+  --st-up-bg: #eef0ec; --st-up-ink: #47524c;
+  --st-near-bg: #e3eefb; --st-near-ink: #1d4e89; --st-near-line: #5b8fd0;
+  --st-soon-bg: #fef0c7; --st-soon-ink: #6e4600; --st-soon-line: #fab219;
+  --st-now-bg: #fde3e3; --st-now-ink: #9b1c1c; --st-now-line: #d03b3b;
+  --st-late-bg: #d03b3b; --st-late-ink: #ffffff;
+  --st-act-bg: #ede7f6; --st-act-ink: #4a2c82;
+  --late-bg: #d03b3b; --late-ink: #ffffff;
+  --red-bg: #fde3e3; --red-ink: #9b1c1c;
+  --info-bg: #e3eefb; --info-ink: #1d4e89;
   --chip-bg: #eef0ec; --chip-ink: #3b4640;
-  --early-bg: #edf3f8; --early-line: #c5d6e3; --early-ink: #1f3f57;
-  --warn-bg: #fff4e5; --warn-line: #e8c59a; --warn-ink: #6b3d00;
-  --shadow: 0 1px 2px rgba(20, 32, 26, .05);
+  --early-bg: #eef4f9; --early-line: #c8d8e6; --early-ink: #1f3f57;
+  --warn-bg: #fff1d6; --warn-line: #e8c59a; --warn-ink: #6b4100;
+  --shadow: 0 1px 2px rgba(20, 32, 26, .04);
   --sans: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
-  --r: 12px;
+  --r: 10px;
 }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #0f1311; --surface: #181e1b; --surface-2: #1e2521; --line: #2d3631; --line-soft: #242c28;
-  --ink: #edf2ee; --ink-2: #b9c4bd; --ink-3: #8f9a94;
-  --accent: #5fbf8f; --accent-ink: #0d1a13; --accent-soft: #1c3328; --bar: #0a0d0c; --bar-ink: #a9c2b4;
-  --input: #3a331d; --input-line: #b8922a;
-  --series-1: #3987e5; --series-2: #199e70; --neutral-mark: #4a544f;
-  --good-bg: #1c3a29; --good-ink: #8fe0b2;
-  --late-bg: #a33232; --late-ink: #ffffff;
-  --red-bg: #5a2424; --red-ink: #ffd6d6;
-  --orange-bg: #5a3a1c; --orange-ink: #ffe0c2;
-  --yellow-bg: #4b4216; --yellow-ink: #fff0b5;
-  --info-bg: #1f3346; --info-ink: #cfe3f5;
-  --chip-bg: #252e29; --chip-ink: #c6d0ca;
-  --early-bg: #18242e; --early-line: #2c4255; --early-ink: #cfe3f5;
-  --warn-bg: #33270f; --warn-line: #6b4f22; --warn-ink: #ffdcaa;
-  --shadow: none; color-scheme: dark; } }
-:root[data-theme="dark"] {
-  --bg: #0f1311; --surface: #181e1b; --surface-2: #1e2521; --line: #2d3631; --line-soft: #242c28;
-  --ink: #edf2ee; --ink-2: #b9c4bd; --ink-3: #8f9a94;
-  --accent: #5fbf8f; --accent-ink: #0d1a13; --accent-soft: #1c3328; --bar: #0a0d0c; --bar-ink: #a9c2b4;
-  --input: #3a331d; --input-line: #b8922a;
-  --series-1: #3987e5; --series-2: #199e70; --neutral-mark: #4a544f;
-  --good-bg: #1c3a29; --good-ink: #8fe0b2;
-  --late-bg: #a33232; --late-ink: #ffffff;
-  --red-bg: #5a2424; --red-ink: #ffd6d6;
-  --orange-bg: #5a3a1c; --orange-ink: #ffe0c2;
-  --yellow-bg: #4b4216; --yellow-ink: #fff0b5;
-  --info-bg: #1f3346; --info-ink: #cfe3f5;
-  --chip-bg: #252e29; --chip-ink: #c6d0ca;
-  --early-bg: #18242e; --early-line: #2c4255; --early-ink: #cfe3f5;
-  --warn-bg: #33270f; --warn-line: #6b4f22; --warn-ink: #ffdcaa;
-  --shadow: none; color-scheme: dark; }
 
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.45; margin: 0; }
@@ -85,9 +62,11 @@ main { max-width: 1440px; margin: 0 auto; padding: 18px 24px 64px; display: flex
 .eyebrow { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
 
 /* month header */
-.monthbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.monthbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 20px; }
+.eyebrow-top { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
 .month-nav { display: flex; align-items: center; gap: 10px; }
-.month-nav h1 { font-size: 30px; letter-spacing: -.01em; min-width: 8.5em; text-align: center; }
+.month-nav h1 { font-size: 30px; letter-spacing: -.01em; min-width: 7.6em; text-align: center; }
+.month-title { display: flex; flex-direction: column; gap: 2px; }
 .icon-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; display: grid; place-items: center; color: var(--ink-2); }
 .icon-btn:hover { border-color: var(--ink-3); color: var(--ink); }
 .today { color: var(--ink-2); }
@@ -138,17 +117,15 @@ main { max-width: 1440px; margin: 0 auto; padding: 18px 24px 64px; display: flex
 .kpi-sub { font-size: 12.5px; }
 .kpi-cap { font-size: 11.5px; color: var(--ink-3); border-top: 1px solid var(--line-soft); padding-top: 6px; margin-top: 4px; }
 .v-good { color: var(--good-ink); } .v-bad { color: var(--late-bg); }
-:root[data-theme="dark"] .v-bad { color: var(--red-ink); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .v-bad { color: var(--red-ink); } }
 
 /* paycheck plan */
 .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
 .slot { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
-.slot-head { padding: 10px 14px; background: var(--surface-2); display: flex; justify-content: space-between; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--line-soft); }
+.slot-head { padding: 10px 14px; background: var(--series-1-head); color: #fff; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.slot-head.single { background: var(--series-2-head); }
 .slot-head b { font-size: 14.5px; }
 .who { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
-.who.both { background: color-mix(in srgb, var(--series-1) 16%, transparent); color: var(--ink); }
-.who.single { background: color-mix(in srgb, var(--series-2) 18%, transparent); color: var(--ink); }
+.who.both, .who.single { background: rgba(255,255,255,.18); color: #fff; }
 .slot table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .slot th { font-weight: 600; color: var(--ink-3); font-size: 11.5px; text-align: right; padding: 8px 14px 2px; }
 .slot th:first-child { text-align: left; }
@@ -188,13 +165,22 @@ table.bills { width: 100%; border-collapse: collapse; min-width: 860px; }
 .b-detail { font-size: 12px; color: var(--ink-3); }
 .b-why { font-size: 12px; color: var(--ink-2); max-width: 280px; }
 .pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
-.pill.paid { background: var(--good-bg); color: var(--good-ink); }
-.pill.late { background: var(--late-bg); color: var(--late-ink); }
-.pill.red { background: var(--red-bg); color: var(--red-ink); }
-.pill.orange { background: var(--orange-bg); color: var(--orange-ink); }
-.pill.yellow { background: var(--yellow-bg); color: var(--yellow-ink); }
 .pill.info { background: var(--info-bg); color: var(--info-ink); }
 .pill.up, .pill.muted { background: var(--chip-bg); color: var(--chip-ink); font-weight: 600; }
+/* Due-date status: grey (later) → blue (6–10 days) → amber (2–5) → red outline (today/tomorrow) → solid red (late); green = paid */
+.pill.st { display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent; }
+.pill.st::before { font-weight: 700; }
+.pill.st.paid { background: var(--st-paid-bg); color: var(--st-paid-ink); border-color: color-mix(in srgb, var(--st-paid-line) 35%, transparent); } .pill.st.paid::before { content: "✓"; }
+.pill.st.part { background: var(--surface); color: var(--st-paid-ink); border-color: var(--st-paid-line); } .pill.st.part::before { content: "◐"; }
+.pill.st.up { background: var(--st-up-bg); color: var(--st-up-ink); } .pill.st.up::before { content: "○"; }
+.pill.st.yellow { background: var(--st-near-bg); color: var(--st-near-ink); border-color: color-mix(in srgb, var(--st-near-line) 45%, transparent); } .pill.st.yellow::before { content: "◷"; }
+.pill.st.orange { background: var(--st-soon-bg); color: var(--st-soon-ink); border-color: var(--st-soon-line); } .pill.st.orange::before { content: "⚠"; }
+.pill.st.red { background: var(--st-now-bg); color: var(--st-now-ink); border-color: var(--st-now-line); } .pill.st.red::before { content: "!"; }
+.pill.st.late { background: var(--st-late-bg); color: var(--st-late-ink); } .pill.st.late::before { content: "✕"; }
+.pill.st.info { background: var(--st-act-bg); color: var(--st-act-ink); } .pill.st.info::before { content: "✎"; }
+.pill.st.muted { background: var(--chip-bg); color: var(--chip-ink); }
+.stkey { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; color: var(--ink-3); }
+.stkey .pill { font-size: 11px; }
 .flag { color: var(--late-bg); font-weight: 700; margin-left: 4px; }
 .cashm { display: inline-flex; gap: 10px; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 .cashm i { font-style: normal; display: inline-flex; align-items: center; gap: 4px; }
@@ -350,3 +336,5 @@ details.p-more:not(.p-pad) summary { padding-top: 12px; padding-bottom: 12px; }
 .pane .periods { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); margin: 8px 0 0; }
 .pane .keyline { padding: 0 2px; }
 .pane .p-in .locked-val { width: 100%; }
+.slot td:first-child { white-space: nowrap; }
+.p-bill .pill { min-width: 96px; justify-content: center; }

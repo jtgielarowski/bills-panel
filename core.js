@@ -204,14 +204,14 @@ function status(r) {
   if (!r.Applies) return { t: "Not needed", c: "muted" };
   const flag = r.Source === "Debt" ? (debtsById[r.ItemID] || {}).Flag : "";
   if (r.Source === "Debt" && !r["Paid date"] && flag === "Needs Friday balance") return { t: "Enter balance", c: "info" };
-  if (r.Remaining <= 0) return r["Paid total"] > 0 ? { t: "Paid ✓", c: "paid" } : { t: "—", c: "muted" };
-  if (r["Paid total"] > 0) return { t: "Part paid", c: "yellow" };
+  if (r.Remaining <= 0) return r["Paid total"] > 0 ? { t: "Paid", c: "paid" } : { t: "—", c: "muted" };
+  if (r["Paid total"] > 0) return { t: "Part paid", c: "part" };
   const d = r["Days out"];
   if (d < 0) return { t: `Late · ${-d} day${d === -1 ? "" : "s"}`, c: "late" };
   if (d === 0) return { t: "Due today", c: "red" };
   if (d === 1) return { t: "Due tomorrow", c: "red" };
-  if (d <= META.soonOrangeDays) return { t: `${d} days`, c: "orange" };
-  if (d <= META.soonYellowDays) return { t: `${d} days`, c: "yellow" };
+  if (d <= META.soonOrangeDays) return { t: `In ${d} days`, c: "orange" };
+  if (d <= META.soonYellowDays) return { t: `In ${d} days`, c: "yellow" };
   return { t: "Upcoming", c: "up" };
 }
 function inView(r, vm) {
@@ -252,6 +252,8 @@ function kpis(vm) {
 
 /* Status marks: round, read-only badges (they tick themselves) — deliberately unlike checkboxes. */
 const statusMark = x => `<span class="smark ${x.on ? "on" : x.step ? "step" : ""}" title="Fills in automatically" aria-label="${x.on ? "Done" : x.step ? "Your step" : "Not done yet"}">${x.on ? "✓" : x.step ? "→" : ""}</span>`;
+/* Key for the due-date colours (same scale in the panel, the full view and the This Month sheet). */
+const statusKey = () => `<div class="stkey" aria-label="What the colours mean"><span>Due-date colours:</span><span class="pill st late">Late</span><span class="pill st red">Today or tomorrow</span><span class="pill st orange">In 2–5 days</span><span class="pill st yellow">In 6–10 days</span><span class="pill st up">Upcoming</span><span class="pill st paid">Paid</span></div>`;
 const keyLine = () => `<p class="keyline"><span><i class="k-in"></i>You type here</span><span><i class="smark on">✓</i>Fills in automatically</span><span>🔒 Saved — unlock to change</span></p>`;
 
 /* Checklists (panel and full view) */
