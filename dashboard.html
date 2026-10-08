@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bills &amp; Paychecks — full view</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="app.css?v=1">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+<header class="appbar">
+  <div class="appbar-in">
+    <div class="brand">Bills &amp; Paychecks <small id="brandSub">PNC checking</small></div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button class="tab" role="tab" data-view="month" aria-selected="true">This month</button>
+      <button class="tab" role="tab" data-view="friday" aria-selected="false">Friday update</button>
+      <button class="tab" role="tab" data-view="spending" aria-selected="false">Spending</button>
+      <button class="tab" role="tab" data-view="budget" aria-selected="false">Budget vs actual</button>
+      <button class="tab" role="tab" data-view="debts" aria-selected="false">Debts</button>
+      <button class="tab" role="tab" data-view="details" aria-selected="false">Model details</button>
+    </nav>
+    <button class="btn small" id="closeFull" data-act="close-full" hidden>Close</button>
+    <div class="mode-toggle" role="group" aria-label="Level of detail">
+      <button id="modeSimple" aria-pressed="true">Simple</button>
+      <button id="modeDetailed" aria-pressed="false">Detailed</button>
+    </div>
+  </div>
+</header>
+<div class="sample" id="sampleBanner"><p><strong>Local test data.</strong> Not connected to a workbook; edits stay in this page.</p></div>
+<main id="app" aria-live="polite"></main>
+<div id="toast" class="toast" hidden></div>
+<script src="core.js?v=1"></script>
+<script src="full.js?v=1"></script>
+</body>
+</html>

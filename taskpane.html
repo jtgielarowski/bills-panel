@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bills &amp; Paychecks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="app.css?v=1">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body class="pane">
+<header class="p-head">
+  <div class="p-brand">Bills &amp; Paychecks</div>
+  <button class="p-icon" data-act="refresh" aria-label="Refresh from the workbook" title="Refresh from the workbook">↻</button>
+</header>
+<div class="p-status" id="pStatus"></div>
+<nav class="p-tabs" role="tablist" aria-label="Panel views">
+  <button class="p-tab" role="tab" data-pane="today" aria-selected="true">Today</button>
+  <button class="p-tab" role="tab" data-pane="friday" aria-selected="false">Friday update</button>
+  <button class="p-tab" role="tab" data-pane="bills" aria-selected="false">Bills</button>
+</nav>
+<main id="app" class="p-main" aria-live="polite"><p class="p-loading">Reading the workbook…</p></main>
+<footer class="p-foot">
+  <button class="btn wide" data-act="open-full">Open full dashboard ↗</button>
+</footer>
+<div id="toast" class="toast" hidden></div>
+<script src="core.js?v=1"></script>
+<script src="pane.js?v=1"></script>
+</body>
+</html>
