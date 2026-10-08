@@ -13,7 +13,7 @@ let fullDialog = null;
 function render() {
   document.querySelectorAll(".p-tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.pane === state.pane)));
   const v = { today: paneToday, friday: paneFriday, bills: paneBills }[state.pane];
-  $("#app").innerHTML = v();
+  $("#app").innerHTML = keyLine() + v();
   const fails = +META.checksFailing || 0;
   $("#pStatus").innerHTML = `<span>${fmtD(META.asOf, { weekday: "short", month: "short", day: "numeric" })}</span>
     <button class="p-health ${fails ? "bad" : ""}" data-act="open-details" title="Open the model checks"><span class="dot"></span>${fails ? `${fails} check${fails === 1 ? "" : "s"} failing` : "Checks OK"}</button>`;
@@ -38,7 +38,7 @@ function paneToday() {
         <div class="p-li-main"><div class="pl-name">${esc(r.Bill)}</div>
           <div class="pl-note"><span class="pill ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span></div></div>
         <div class="p-li-side"><div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
-          ${done ? `<button class="btn small ghost" data-act="undo-row" data-id="${esc(r.RowID)}">Undo</button>`
+          ${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
                  : `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`}</div>
       </li>`; }).join("")}</ul>` : `<p class="empty">Nothing to pay from this payday.</p>`}
     <div class="p-foot-note">${toPay.length ? `Total <b class="money">${money(sum(toPay, r => r["Payday amount"]))}</b> · ` : ""}After paying, PNC should have about <b class="money">${money(curPlan ? curPlan["Cash after"] : null)}</b> until ${fmtD(nextP, { weekday: "short", month: "short", day: "numeric" })}.</div>
@@ -46,7 +46,7 @@ function paneToday() {
 
   <section class="p-card p-pad">
     <h3 class="p-h">Friday steps</h3>
-    <ul class="checklist">${routine.map((x, i) => `<li><span class="tick ${x.on ? "on" : ""} ${x.step ? "step" : ""}" aria-hidden="true">${x.on ? "✓" : x.step ? "•" : ""}</span><div><div class="ck-label">${x.label}</div><div class="ck-note">${i < 2 && !x.on ? `<button class="linkish" data-act="go-pane" data-pane="friday">Do it now →</button>` : x.note.replace(" tab", "")}</div></div></li>`).join("")}</ul>
+    <ul class="checklist">${routine.map((x, i) => `<li>${statusMark(x)}<div><div class="ck-label">${x.label}</div><div class="ck-note">${i < 2 && !x.on ? `<button class="linkish" data-act="go-pane" data-pane="friday">Do it now →</button>` : x.note.replace(" tab", "")}</div></div></li>`).join("")}</ul>
   </section>
 
   <section class="p-kpis" aria-label="Key numbers">
@@ -63,36 +63,37 @@ function paneToday() {
 
   <details class="p-card p-pad p-more">
     <summary><span>End of ${monthName(vm, { month: "long" })}</span><span>${eom.filter(x => x.on).length} of 3 done</span></summary>
-    <ul class="checklist" style="margin-top:10px">${eom.map(x => `<li><span class="tick ${x.on ? "on" : ""}" aria-hidden="true">${x.on ? "✓" : ""}</span><div><div class="ck-label">${x.label}</div><div class="ck-note">${x.note}</div></div></li>`).join("")}</ul>
+    <ul class="checklist" style="margin-top:10px">${eom.map(x => `<li>${statusMark(x)}<div><div class="ck-label">${x.label}</div><div class="ck-note">${x.note}</div></div></li>`).join("")}</ul>
     ${!eom[2].on ? `<button class="btn small" style="margin-top:10px" data-act="close-month" data-month="${vm}">Mark ${monthName(vm, { month: "long" })} closed</button>` : ""}
   </details>`;
 }
 
 function paneFriday() {
-  const cards = DB.tblDebts.filter(d => d["Expected category"] !== "Loan");
-  const main = cards.filter(d => d["Expected category"] !== "$0 Balance" || d["Has balance"] === true);
-  const zero = cards.filter(d => !main.includes(d));
-  const lastBank = DB.tblCashLog.filter(c => c.Date && c["PNC balance"] !== null).sort((a, b) => a.Date < b.Date ? 1 : -1)[0];
-  const row = d => `<div class="p-card-row">
-      <div class="p-cr-name"><b>${esc(d.Name)}</b><span class="hint">${d["Latest balance"] === null || d["Latest balance"] === "" ? "no balance yet" : `${money(d["Latest balance"])} on ${shortD(d["Latest log date"])}`}</span></div>
-      <label class="p-in">Balance today<input type="number" step="0.01" min="0" inputmode="decimal" name="bal-${d.DebtID}" placeholder="type balance"></label>
-      <label class="p-in">Minimum<input type="number" step="0.01" min="0" inputmode="decimal" name="min-${d.DebtID}" placeholder="${d["Latest minimum"] === null || d["Latest minimum"] === "" ? "" : `keep ${d["Latest minimum"]}`}"></label>
-    </div>`;
-  return `<form data-form="friday" class="p-stack">
-    <p class="p-intro">Every Friday morning, before paying bills. Type what each website or app shows today. <b>Leave a box blank</b> to skip it.</p>
+  const vm = state.vm, picker = fridayPicker(vm), i = fridayInfo(state.fri.date);
+  const main = i.cards.filter(d => d["Expected category"] !== "$0 Balance" || d["Has balance"] === true || i.saved[d.Name]);
+  const zero = i.cards.filter(d => !main.includes(d));
+  const row = d => { const sv = i.saved[d.Name], prev = DB.tblCardLog.filter(l => l["Card or loan"] === d.Name && isVal(l.Balance) && l.Date < i.date).at(-1); return `<div class="p-card-row">
+      <div class="p-cr-name"><b>${esc(d.Name)}</b><span class="hint">${prev ? `${money(prev.Balance)} on ${shortD(prev.Date)}` : "no earlier balance"}</span></div>
+      <label class="p-in">Balance${fridayField(i, `bal-${d.DebtID}`, `${d.Name} balance`, sv ? sv.Balance : null)}</label>
+      <label class="p-in">Minimum${fridayField(i, `min-${d.DebtID}`, `${d.Name} minimum`, sv ? sv.Minimum : null, isVal(d["Latest minimum"]) ? `keep ${d["Latest minimum"]}` : "")}</label>
+    </div>`; };
+  return `<div class="p-monthnav"><button class="icon-btn" data-act="prev-month" aria-label="Previous month">‹</button><b>${monthName(vm)}</b><button class="icon-btn" data-act="next-month" aria-label="Next month">›</button></div>
+  ${picker}
+  <form data-form="friday" class="p-stack">
+    ${i.date ? fridayBanner(i) : ""}
     <section class="p-card p-pad">
-      <label class="p-in big">PNC checking balance right now<input type="number" step="0.01" min="0" inputmode="decimal" name="bank" placeholder="type balance"></label>
-      <p class="hint" style="margin:6px 0 0">The plan expected ${money(META.expectedBankToday)}${lastBank ? ` · last entry ${money(lastBank["PNC balance"])} on ${shortD(lastBank.Date)}` : ""}. It already includes today's paychecks.</p>
+      <label class="p-in big">PNC checking balance${fridayField(i, "bank", "PNC checking balance", i.bank ? i.bank["PNC balance"] : null)}</label>
+      <p class="hint" style="margin:6px 0 0">Includes that day's paychecks. The plan expected ${money(META.expectedBankToday)} today.</p>
     </section>
     <section class="p-card">
       <h3 class="p-h p-pad-x">Cards in use</h3>
       ${main.map(row).join("")}
     </section>
-    <details class="p-card p-more">
+    ${zero.length ? `<details class="p-card p-more">
       <summary class="p-pad-x"><span>Cards at $0 (${zero.length})</span><span class="hint">only if a balance shows up</span></summary>
       ${zero.map(row).join("")}
-    </details>
-    <div class="p-sticky"><button class="btn primary wide" type="submit">Save Friday update</button></div>
+    </details>` : ""}
+    ${i.editable ? `<div class="p-sticky"><button class="btn primary wide" type="submit">Save Friday update</button></div>` : ""}
   </form>`;
 }
 
@@ -110,7 +111,7 @@ function paneBills() {
     html += `<li class="p-bill ${open ? "open" : ""}">
       <button class="p-bill-btn" ${st.c === "info" ? `data-act="go-pane" data-pane="friday"` : `data-act="open-row" data-id="${esc(r.RowID)}"`} aria-expanded="${open}">
         <span class="pill ${st.c}">${esc(st.t)}</span>
-        <span class="p-bill-name">${esc(r.Bill)}<small>${r["Paid date"] ? `Paid ${shortD(r["Paid date"])}` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
+        <span class="p-bill-name">${esc(r.Bill)}<small>${r["Paid date"] ? `🔒 Paid ${shortD(r["Paid date"])} · ${open ? "unlocked" : "tap to unlock"}` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
         <span class="money">${money(r["Paid date"] ? r["Paid total"] : r.Amount)}</span>
       </button>
       ${open ? `<div class="p-form">${payForm(r)}${source.kind === "excel" ? `<button class="linkish" type="button" data-act="show-row" data-id="${esc(r.RowID)}">Show this row in the workbook</button>` : ""}</div>` : ""}
@@ -185,6 +186,10 @@ document.addEventListener("click", async e => {
   if (act === "show-row") await ExcelSource.select("tblRegister", row.RowID);
   if (act === "quick-pay") { row._paidToday = true; await writeRow(row, { "Paid date": META.asOf, "Paid amount": +row["Payday amount"] }, `Marked ${esc(row.Bill)} paid · ${money(row["Payday amount"])}`); }
   if (act === "undo-row") await writeRow(row, { "Paid date": null, "Paid amount": null }, `Cleared the payment for ${esc(row.Bill)}`);
+  if (act === "unlock-row") { state.pane = "bills"; state.vm = row.Month < monthKey(META.asOf) ? monthKey(META.asOf) : state.vm; state.billFilter = "paid"; state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.scrollIntoView({ block: "center" }); }
+  if (act === "pick-friday") { state.fri.date = t.dataset.date; state.fri.unlocked = false; render(); }
+  if (act === "unlock-friday") { state.fri.unlocked = true; render(); const x = document.querySelector('[data-form="friday"] input'); if (x) x.focus(); }
+  if (act === "lock-friday") { state.fri.unlocked = false; render(); }
   if (act === "clear-row") { state.openRow = null; await writeRow(row, { "Paid date": null, "Paid amount": null, "Extra paid date": null, "Extra paid amount": null, "Reason if different": null }, `Cleared the payment for ${esc(row.Bill)}`); }
   if (act === "close-month") await closeMonth(t.dataset.month);
   if (["quick-pay", "undo-row", "clear-row", "close-month"].includes(act)) sendData();
@@ -193,7 +198,7 @@ document.addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   if (f.dataset.form === "pay") await submitPay(f);
-  if (f.dataset.form === "friday") { if (await saveFriday(new FormData(f))) { state.pane = "today"; render(); window.scrollTo({ top: 0 }); } }
+  if (f.dataset.form === "friday") await saveFriday(new FormData(f), fridayInfo(state.fri.date));
   sendData();
 });
 

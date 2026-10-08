@@ -8,17 +8,24 @@
    READS : tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory,
            tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog,
            tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule
-   WRITES: tblRegister input columns (matched by RowID); new rows in tblCardLog,
-           tblCashLog, tblOther; tblMonths[Month closed?] (matched by Month)
+   WRITES: tblRegister input columns (matched by RowID); tblCardLog / tblCashLog
+           rows matched by Date (+ card) — a correction REPLACES that Friday's row,
+           never adds a second one; tblOther new rows; tblMonths[Month closed?]
 
-   change = { table, rowId, values }  → update one row
-          = { table, append: [rows] } → add rows (fills the first blank row, else adds one)
+   change = { table, rowId, values }                  → update one row by its key
+          = { table, match:{col:value}, values, upsert } → update the matching row (or add it)
+          = { table, append: [rows] }                  → add rows (fills the first blank row, else adds one)
+
+   LOCKING: after a save, the written input cells are locked (protection.locked = true)
+   so typing over them in Excel needs Review ▸ Unprotect Sheet. A register row is
+   locked while it has a Paid date and reopened when the payment is cleared.
    ============================================================================= */
 "use strict";
 
 const TABLES = ["tblExportMeta", "tblExportPlan", "tblExportCardPlan", "tblExportHistory", "tblExportCategory", "tblExportChecks",
   "tblRegister", "tblDebts", "tblCardLog", "tblCashLog", "tblOther", "tblPaychecks", "tblMonths", "tblDadHistory", "tblDadSchedule"];
 const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month" };
+const LOG_TABLES = ["tblCardLog", "tblCashLog", "tblOther"];
 /* Columns the dashboard is allowed to write. Anything else is refused, so a bug here can never overwrite a formula. */
 const WRITABLE = {
   tblRegister: ["Paid date", "Paid amount", "Extra paid date", "Extra paid amount", "Reason if different", "Notes"],
@@ -61,34 +68,45 @@ const ExcelSource = {
   },
   async write(change) {
     const allowed = WRITABLE[change.table] || [];
-    const rows = change.append || [change.values];
+    const rows = change.append || [{ ...(change.match || {}), ...change.values }];
     for (const r of rows) for (const k of Object.keys(r)) if (!allowed.includes(k)) throw new Error(`Not allowed to write ${change.table}[${k}]`);
+    const isLog = LOG_TABLES.includes(change.table);
     return Excel.run(async ctx => {
       const t = ctx.workbook.tables.getItem(change.table);
       const hdrR = t.getHeaderRowRange(), body = t.getDataBodyRange();
       hdrR.load("values"); body.load("values, formulas, numberFormat, rowCount"); await ctx.sync();
-      const cols = hdrR.values[0];
+      const cols = hdrR.values[0], ci = c => cols.indexOf(c);
+      const cellText = (i, c) => String(fromCell(body.values[i][ci(c)], (body.numberFormat[i] || [])[ci(c)]) ?? "");
+      const findRow = crit => body.values.findIndex((_, i) => Object.entries(crit).every(([k, v]) => cellText(i, k) === String(v ?? "")));
+      const lockRow = (row, locked) => allowed.forEach(c => { if (ci(c) >= 0) row.getCell(0, ci(c)).format.protection.locked = locked; });
       await this.withSheet(ctx, t, async () => {
-        if (change.append) {
-          for (const r of change.append) {
-            // Reuse the first row whose input columns are all blank (pre-sized tables); otherwise add a row.
-            const blank = body.values.findIndex(v => allowed.every(c => cols.indexOf(c) < 0 || v[cols.indexOf(c)] === ""));
-            if (blank >= 0) {
-              for (const [k, v] of Object.entries(r)) body.getCell(blank, cols.indexOf(k)).values = [[toCell(v)]];
-              body.values[blank] = body.values[blank].map((x, j) => (cols[j] in r ? toCell(r[cols[j]]) : x));
-            } else {
-              // Copy the calculated-column formulas from the last row so they keep working on the new row.
-              const last = body.formulas[body.rowCount - 1] || [];
-              t.rows.add(null, [cols.map((c, j) => (c in r) ? toCell(r[c]) : (typeof last[j] === "string" && last[j].startsWith("=") ? last[j] : ""))]);
-            }
+        const add = async r => {
+          // Reuse the first row whose input columns are all blank (pre-sized tables); otherwise add a row.
+          const blank = body.values.findIndex(v => allowed.every(c => ci(c) < 0 || v[ci(c)] === ""));
+          if (blank >= 0) {
+            for (const [k, v] of Object.entries(r)) body.getCell(blank, ci(k)).values = [[toCell(v)]];
+            body.values[blank] = body.values[blank].map((x, j) => (cols[j] in r ? toCell(r[cols[j]]) : x));
+            if (isLog) lockRow(body.getRow(blank), true);
+          } else {
+            // Copy the calculated-column formulas from the last row so they keep working on the new row.
+            const last = body.formulas[body.rowCount - 1] || [];
+            t.rows.add(null, [cols.map((c, j) => (c in r) ? toCell(r[c]) : (typeof last[j] === "string" && last[j].startsWith("=") ? last[j] : ""))]);
             await ctx.sync();
+            if (isLog) lockRow(t.getDataBodyRange().getLastRow(), true);
           }
-          return;
+          await ctx.sync();
+        };
+        if (change.append) { for (const r of change.append) await add(r); return; }
+        const idx = findRow(change.match || { [ROW_KEY[change.table]]: change.rowId });
+        if (idx < 0) {
+          if (change.upsert) { await add({ ...change.match, ...change.values }); return; }
+          throw new Error(`Row ${change.rowId || JSON.stringify(change.match)} not found in ${change.table}`);
         }
-        const keyCol = cols.indexOf(ROW_KEY[change.table]);
-        const idx = body.values.findIndex((r, i) => String(fromCell(r[keyCol], body.numberFormat[i][keyCol])) === String(change.rowId));
-        if (idx < 0) throw new Error(`Row ${change.rowId} not found in ${change.table}`);
-        for (const [k, v] of Object.entries(change.values)) body.getCell(idx, cols.indexOf(k)).values = [[toCell(v)]];
+        for (const [k, v] of Object.entries(change.values)) body.getCell(idx, ci(k)).values = [[toCell(v)]];
+        if (change.table === "tblRegister") {
+          const paid = "Paid date" in change.values ? change.values["Paid date"] : cellText(idx, "Paid date");
+          lockRow(body.getRow(idx), !!paid);     // saved payment = locked; cleared payment = open again
+        } else if (isLog) lockRow(body.getRow(idx), true);
         await ctx.sync();
       });
     });
@@ -113,6 +131,11 @@ const SampleSource = {
   async write(change) {
     const t = window.__SAMPLE__[change.table];
     if (change.append) { change.append.forEach(r => t.push(r)); return; }
+    if (change.match) {
+      const hit = t.filter(r => Object.entries(change.match).every(([k, v]) => String(r[k] ?? "") === String(v ?? ""))).at(-1);
+      if (hit) Object.assign(hit, change.values); else if (change.upsert) t.push({ ...change.match, ...change.values });
+      return;
+    }
     const row = t.find(r => r[ROW_KEY[change.table]] === change.rowId);
     Object.assign(row, change.values);
     if (change.table === "tblRegister") localRecalc(row);
@@ -142,7 +165,7 @@ const GROUP_ORDER = ["Last month's bills", "Housing", "Utilities", "Auto", "Insu
 const REASONS = ["Seasonal / usage", "Price or rate change", "One-time charge", "Paid early (timing)", "Paid late (timing)", "Extra debt payment", "Budget estimate off", "Other — see note"];
 
 let DB, META, debtsById, plan, paydays, adjust = {}, undoStack = [];
-const state = { view: "month", vm: null, openRow: null, cat: null, detailed: false };
+const state = { view: "month", vm: null, openRow: null, cat: null, detailed: false, fri: { date: null, unlocked: false } };
 
 function index() {
   META = Object.fromEntries(DB.tblExportMeta.map(r => [r.Key, r.Value]));
@@ -227,6 +250,10 @@ function kpis(vm) {
   return { comingIn, received, paidSoFar, goingOut, left: last ? last["Cash after"] : null, paidN, total: rows.length, late, soon, low };
 }
 
+/* Status marks: round, read-only badges (they tick themselves) — deliberately unlike checkboxes. */
+const statusMark = x => `<span class="smark ${x.on ? "on" : x.step ? "step" : ""}" title="Fills in automatically" aria-label="${x.on ? "Done" : x.step ? "Your step" : "Not done yet"}">${x.on ? "✓" : x.step ? "→" : ""}</span>`;
+const keyLine = () => `<p class="keyline"><span><i class="k-in"></i>You type here</span><span><i class="smark on">✓</i>Fills in automatically</span><span>🔒 Saved — unlock to change</span></p>`;
+
 /* Checklists (panel and full view) */
 function fridayRoutine() {
   const active = DB.tblDebts.filter(d => d["Expected category"] === "Active");
@@ -290,24 +317,79 @@ async function writeRow(row, values, msg) {
 }
 async function reload() { DB = await source.load(); index(); }
 
-/* Friday update: one tblCardLog row per card typed in, plus one tblCashLog row for the bank balance. */
-async function saveFriday(fd) {
-  const rows = [];
-  DB.tblDebts.filter(d => d["Expected category"] !== "Loan").forEach(d => {
+/* =========================================================================
+   Friday update — one saved entry per card per Friday, plus one PNC balance per Friday.
+   Saved entries are shown locked; "Unlock to edit" reopens them and saving REPLACES
+   that Friday's rows (match on Date + card), so a balance can never be counted twice.
+   ========================================================================= */
+const isVal = v => v !== null && v !== undefined && v !== "";
+/* The Friday an update belongs to: the latest payday on or before today. */
+function fridayEntryDate() { const past = paydays.filter(p => p.date <= META.asOf); return past.length ? past.at(-1).date : (paydays[0] || {}).date; }
+/* Pay periods (paydays) shown in the picker for the month on screen; keeps the selection valid. */
+function fridayPeriods(vm) {
+  const list = paydaysIn(vm).map(p => p.date);
+  if (!list.includes(state.fri.date)) {
+    const entry = fridayEntryDate();
+    state.fri.date = list.includes(entry) ? entry : (list.filter(d => d <= META.asOf).at(-1) || list[0] || null);
+    state.fri.unlocked = false;
+  }
+  return list;
+}
+function fridayInfo(date) {
+  const cards = DB.tblDebts.filter(d => d["Expected category"] !== "Loan");
+  const saved = {};
+  DB.tblCardLog.forEach(l => { if (l.Date === date && isVal(l.Balance)) saved[l["Card or loan"]] = l; });   // last one wins
+  const bank = DB.tblCashLog.filter(c => c.Date === date && isVal(c["PNC balance"])).at(-1) || null;
+  const any = !!bank || Object.keys(saved).length > 0, entry = fridayEntryDate();
+  const st = any ? "saved" : !date || date > META.asOf ? "future" : date === entry ? "open" : "missed";
+  return { date, cards, saved, bank, state: st, entry, editable: st === "open" || (st === "saved" && state.fri.unlocked) };
+}
+function fridayPicker(vm) {
+  const list = fridayPeriods(vm);
+  if (!list.length) return `<p class="hint">No paydays in ${monthName(vm, { month: "long" })}.</p>`;
+  return `<div class="periods" role="group" aria-label="Pay period">${list.map(d => {
+    const i = fridayInfo(d), mark = i.state === "saved" ? "🔒" : i.state === "open" ? "•" : "";
+    return `<button type="button" class="period ${i.state}" data-act="pick-friday" data-date="${d}" aria-pressed="${d === state.fri.date}"><span>${fmtD(d, { weekday: "short", month: "short", day: "numeric" })}</span><small>${mark} ${{ saved: "Saved", open: "Today", missed: "Not entered", future: "Upcoming" }[i.state]}</small></button>`;
+  }).join("")}</div>`;
+}
+function fridayBanner(i) {
+  const d = fmtD(i.date, { weekday: "short", month: "short", day: "numeric" });
+  if (i.state === "saved" && !state.fri.unlocked) return `<div class="lockbar"><span>🔒 <b>Saved for ${d}.</b> These values are locked.</span><button type="button" class="btn small" data-act="unlock-friday">Unlock to edit</button></div>`;
+  if (i.state === "saved") return `<div class="lockbar editing"><span><b>Editing ${d}.</b> Saving replaces what was saved for that Friday. Blank boxes keep their saved value.</span><button type="button" class="btn small ghost" data-act="lock-friday">Cancel</button></div>`;
+  if (i.state === "open") return `<div class="lockbar open"><span><b>${d}:</b> type each balance, then Save. Entries lock once saved.</span></div>`;
+  if (i.state === "missed") return `<div class="lockbar muted"><span>Nothing was saved for ${d}.</span></div>`;
+  return `<div class="lockbar muted"><span>${d} hasn't come yet.</span></div>`;
+}
+/* One value cell: a locked value, an input, or a dash. */
+function fridayField(i, name, label, saved, placeholder = "") {
+  if (i.editable) return `<input type="number" step="0.01" min="0" inputmode="decimal" name="${name}" aria-label="${esc(label)}" value="${isVal(saved) ? saved : ""}" placeholder="${esc(placeholder)}">`;
+  return isVal(saved) ? `<span class="locked-val" title="Saved — use Unlock to edit">${money(saved)}</span>` : `<span class="hint">—</span>`;
+}
+async function saveFriday(fd, i) {
+  const writes = [];
+  i.cards.forEach(d => {
     const b = fd.get(`bal-${d.DebtID}`), m = fd.get(`min-${d.DebtID}`);
-    if (b !== "" && b !== null) rows.push({ "Date": META.asOf, "Card or loan": d.Name, "Balance": +b, "Minimum": m === "" || m === null ? null : +m, "Note": "Dashboard" });
+    if (!isVal(b)) return;                                     // blank = skip (or keep the saved value)
+    const old = i.saved[d.Name], vals = { "Balance": +b, "Minimum": isVal(m) ? +m : null, "Note": "Dashboard" };
+    if (old && +old.Balance === vals.Balance && String(old.Minimum ?? "") === String(vals.Minimum ?? "")) return;   // unchanged
+    writes.push({ table: "tblCardLog", match: { "Date": i.date, "Card or loan": d.Name }, upsert: true, values: vals });
   });
   const bank = fd.get("bank");
-  if (!rows.length && !bank) { toast("Nothing to save — type at least one balance."); return false; }
+  if (isVal(bank) && !(i.bank && +i.bank["PNC balance"] === +bank)) writes.push({ table: "tblCashLog", match: { "Date": i.date }, upsert: true, values: { "PNC balance": +bank, "Note": "Dashboard" } });
+  if (!writes.length) {
+    if (i.state === "saved") { state.fri.unlocked = false; render(); toast("Nothing changed — still locked."); return true; }
+    toast("Nothing to save — type at least one balance."); return false;
+  }
   const ok = await guarded(async () => {
-    if (rows.length) await source.write({ table: "tblCardLog", append: rows });
-    if (bank) await source.write({ table: "tblCashLog", append: [{ "Date": META.asOf, "PNC balance": +bank, "Note": "Dashboard" }] });
-    if (source.kind === "sample") rows.forEach(r => { const d = DB.tblDebts.find(x => x.Name === r["Card or loan"]); d["Latest balance"] = r.Balance; d["Latest log date"] = r.Date; if (r.Minimum !== null) d["Latest minimum"] = r.Minimum; });
+    for (const w of writes) await source.write(w);
+    if (source.kind === "sample") writes.filter(w => w.table === "tblCardLog").forEach(w => { const d = DB.tblDebts.find(x => x.Name === w.match["Card or loan"]); d["Latest balance"] = w.values.Balance; d["Latest log date"] = i.date; if (w.values.Minimum !== null) d["Latest minimum"] = w.values.Minimum; });
     else await reload();
     return true;
   });
+  if (ok) state.fri.unlocked = false;
   render();
-  if (ok) toast(`Saved ${rows.length} card balance${rows.length === 1 ? "" : "s"}${bank ? " and the PNC balance" : ""}. The plan has been updated.`);
+  const nCards = writes.filter(w => w.table === "tblCardLog").length, nBank = writes.length - nCards;
+  if (ok) toast(`Saved ${nCards ? `${nCards} card balance${nCards === 1 ? "" : "s"}` : ""}${nCards && nBank ? " and " : ""}${nBank ? "the PNC balance" : ""} for ${shortD(i.date)}. They're locked now.`);
   return ok;
 }
 async function closeMonth(vm) {
@@ -324,7 +406,7 @@ async function closeMonth(vm) {
 function payForm(r) {
   const hasFirst = !!r["Paid date"];
   const amt = hasFirst ? r["Paid amount"] : (+r["Payday amount"] || +r.Remaining || r.Amount);
-  return `<form class="payform" data-form="pay" data-id="${esc(r.RowID)}">
+  return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}<form class="payform" data-form="pay" data-id="${esc(r.RowID)}">
     <label class="field">Date paid<input type="date" id="pf-date-${esc(r.RowID)}" name="date" value="${hasFirst ? r["Paid date"] : META.asOf}" required></label>
     <label class="field">Amount paid<input type="number" step="0.01" min="0" id="pf-amt-${esc(r.RowID)}" name="amount" value="${amt}" required></label>
     ${r.Source === "Bill" ? `<label class="field">Reason if different<select id="pf-reason-${esc(r.RowID)}" name="reason"><option value="">—</option>${REASONS.map(x => `<option ${r["Reason if different"] === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>` : ""}

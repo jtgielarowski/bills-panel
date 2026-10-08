@@ -324,3 +324,29 @@ details.p-more:not(.p-pad) summary { padding-top: 12px; padding-bottom: 12px; }
 .pane .toast { bottom: 76px; left: 12px; right: 12px; transform: none; max-width: none; }
 #closeFull { color: var(--ink); }
 .p-in input::placeholder, .data input::placeholder { color: var(--ink-3); font-family: var(--sans); font-size: 12px; }
+
+/* ---- read-only status marks (round: they fill in by themselves, they are not checkboxes) */
+.smark { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 12px; font-weight: 700; font-style: normal; border: 1.5px solid var(--neutral-mark); color: var(--ink-3); cursor: default; flex-shrink: 0; }
+.smark.on { background: var(--good-bg); border-color: var(--good-ink); color: var(--good-ink); }
+.smark.step { border-style: dashed; }
+.keyline i.smark { width: 16px; height: 16px; font-size: 10px; }
+.auto-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--chip-bg); color: var(--chip-ink); font-size: 12px; white-space: nowrap; cursor: default; }
+.keyline { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; font-size: 12px; color: var(--ink-3); }
+.keyline span { display: inline-flex; align-items: center; gap: 6px; }
+.k-in { width: 22px; height: 14px; border-radius: 4px; background: var(--input); border: 1.5px solid var(--input-line); display: inline-block; }
+/* ---- saved / locked values */
+.locked-val { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 5px 10px; border-radius: 8px; background: var(--chip-bg); border: 1px solid var(--line); font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.locked-val::before { content: "🔒"; font-size: 11px; }
+.lockbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; padding: 10px 12px; border-radius: 10px; background: var(--chip-bg); border: 1px solid var(--line); font-size: 13px; }
+.lockbar.editing { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
+.lockbar.open { background: var(--accent-soft); border-color: var(--accent); }
+.lockbar.muted { color: var(--ink-2); }
+/* ---- pay-period picker */
+.periods { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.period { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink); }
+.period small { font-size: 11px; color: var(--ink-3); }
+.period[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--accent-soft); font-weight: 600; }
+.period.missed small { color: var(--warn-ink); }
+.pane .periods { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); margin: 8px 0 0; }
+.pane .keyline { padding: 0 2px; }
+.pane .p-in .locked-val { width: 100%; }
