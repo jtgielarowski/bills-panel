@@ -50,7 +50,8 @@ function viewMonth() {
           <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
           <div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
           <div>${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>` :
-            `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`}</div>
+            quickPayOk(r) ? `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`
+            : `<button class="btn small primary" data-act="open-pay" data-id="${esc(r.RowID)}">Record payment</button>`}</div>
         </li>`; }).join("")}</ul>` : `<p class="empty">Nothing left to pay from this payday.</p>`}
       <div class="payday-foot">
         <span>Total: <strong class="money">${money(sum(payRows.filter(r => r.Remaining > 0), r => r["Payday amount"]))}</strong></span>
@@ -136,24 +137,25 @@ function billTable(vm) {
     const open = state.openRow === r.RowID;
     html += `<tr>
       <td><span class="pill st ${st.c}">${esc(st.t)}</span>${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
-      <td><div class="b-name">${esc(r.Bill)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
+      <td><div class="b-name">${esc(r.Bill)} ${typeTag(r)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
       <td>${shortD(r["Due date"])}${r.Rule === "End of service month" ? `<div class="b-detail">pay by ${shortD(r["Pay by"])}</div>` : ""}</td>
-      <td class="r money">${money(r.Amount)}</td>
+      <td class="amt">${st.c === "info" ? "—" : money(minOf(r))}</td>
+      <td class="amt sug">${st.c === "info" ? "—" : r["Paid date"] ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : r["Paid date"] ? "paid" : esc(basisOf(r))}</span></td>
       <td>${esc(r["Pay from"] || "")}</td>
       <td class="b-why detail-only">${esc(r.Why || "")}</td>
-      <td class="detail-only mono-s">${esc(r.Rule || "")}<br>must ${money(r["Remaining must"])} · extra ${money(r["Extra planned"])}</td>
+      <td class="detail-only mono-s">${esc(r.Rule || "")}<br>must ${money(r["Remaining must"])} · extra ${money(r["Extra planned"])}${+r["Extra unfunded"] > 0 ? ` · unfunded ${money(r["Extra unfunded"])}` : ""}</td>
       <td>${cm ? `<span class="auto-chip" title="Fills in automatically from the paid or planned date">${monthName(cm, { month: "short" })} cash</span>` : `<span class="hint">—</span>`}</td>
-      <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : "—"}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
+      <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : "—"}${varText(r) ? `<div class="b-detail">${esc(varText(r))}</div>` : ""}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
       <td class="r">${st.c === "info" ? `<button class="btn small" data-act="go-friday">Enter balance</button>` :
         `<button class="btn small ${r.Remaining > 0 ? "" : "ghost"}" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${r["Paid date"] ? (open ? "Close" : "🔒 Unlock to edit") : "Record payment"}</button>`}</td>
     </tr>`;
     if (open) html += `<tr class="formrow"><td colspan="12">${payForm(r)}</td></tr>`;
   }
   return `<section class="card card-pad">
-    <div class="card-head"><h2>Bills for ${monthName(vm)}</h2><span class="hint">${rows.length} bills · sorted by group, then due date. Cards appear only when they have a balance.</span></div>
+    <div class="card-head"><h2>Bills for ${monthName(vm)}</h2><span class="hint">${rows.length} bills · Suggested = what the plan says to pay · Minimum = the least you can pay. Cards appear only when they have a balance.</span></div>
     ${statusKey()}<div style="height:10px"></div>
     <div class="table-wrap"><table class="bills">
-      <thead><tr><th>Status</th><th>Bill</th><th>Due</th><th class="r">Amount</th><th>Pay from</th><th class="detail-only">Why this payday</th><th class="detail-only">Planner</th><th>Cash month</th><th>Paid</th><th class="r"><span class="sr">Action</span></th></tr></thead>
+      <thead><tr><th>Status</th><th>Bill</th><th>Due</th><th class="r">Minimum</th><th class="r">Suggested</th><th>Pay from</th><th class="detail-only">Why this payday</th><th class="detail-only">Planner</th><th>Cash month</th><th>Paid</th><th class="r"><span class="sr">Action</span></th></tr></thead>
       <tbody>${html || `<tr><td colspan="12" class="empty">No bills this month.</td></tr>`}</tbody>
     </table></div>
   </section>`;
@@ -229,32 +231,44 @@ function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))
 function viewFriday() {
   const vm = state.vm, picker = fridayPicker(vm), i = fridayInfo(state.fri.date);
   const lastBank = DB.tblCashLog.filter(c => c.Date && isVal(c["PNC balance"])).sort((a, b) => a.Date < b.Date ? 1 : -1)[0];
+  const futurePay = i.date && i.state === "future" ? paycheckForm(i.date) : "";
+  let rows = "", g = null;
+  for (const d of i.cards) {
+    const cat = d["Expected category"], sv = i.saved[d.Name], prev = DB.tblCardLog.filter(l => l["Card or loan"] === d.Name && isVal(l.Balance) && l.Date < i.date).at(-1);
+    if (cat !== g) { g = cat; rows += `<tr class="group"><td colspan="7">${{ "Active": "Cards in use", "Balance Transfer": "Balance transfer", "$0 Balance": "Cards at $0 — type 0 to confirm" }[cat]}</td></tr>`; }
+    rows += `<tr>
+        <td><b>${esc(d.Name)}</b>${cat === "Balance Transfer" ? `<div class="hint">${esc(btPlanText(d))}</div>` : ""}</td>
+        <td><span class="pill ${cat === "Active" ? "info" : "muted"}">${esc(cat)}</span></td>
+        <td class="r money">${prev ? money(prev.Balance) : "—"}<div class="hint">${prev ? shortD(prev.Date) : ""}</div></td>
+        <td>${fridayField(i, `bal-${d.DebtID}`, `${d.Name} balance`, sv ? sv.Balance : null, "0 if $0")}</td>
+        <td>${fridayField(i, `min-${d.DebtID}`, `${d.Name} minimum payment`, sv ? sv.Minimum : null, isVal(d["Latest minimum"]) ? `keep ${d["Latest minimum"]}` : "")}</td>
+        <td>${d["Due day"] ? `${d["Due day"]}th` : "—"}</td>
+        <td class="hint">${esc(d.Flag || "")}</td></tr>`;
+  }
   return `${monthBar()}
-  <form class="card card-pad" data-form="friday">
-    <div class="card-head"><h2>Friday update</h2><span class="hint">Pick a pay period. Every Friday morning, before paying bills.</span></div>
+  <section class="card card-pad">
+    <div class="card-head"><h2>Friday update</h2><span class="hint">Pick a pay period. Every Friday morning, before paying bills — every card, every Friday.</span></div>
     ${picker}
     ${i.date ? fridayBanner(i) : ""}
-    <div class="statgrid" style="margin:14px 0 16px">
-      <div class="field">PNC checking balance (includes that day's paychecks)${fridayField(i, "bank", "PNC checking balance", i.bank ? i.bank["PNC balance"] : null)}</div>
+    ${futurePay ? `<div style="margin-top:12px">${futurePay}</div>` : ""}
+  </section>
+  ${state.detailed ? DB.tblDebts.filter(d => d.Name && d["Expected category"] === "Balance Transfer").map(d => `<section class="card card-pad"><div class="card-head"><h2>${esc(d.Name)} · payment plan</h2><span class="hint">Detailed view only · balance to plan ${money(d["Balance to plan"])} · ${d["Months left"]} payments to ${esc(promoLabel(d))}</span></div>${btForm(d)}</section>`).join("") : ""}
+  ${i.state !== "future" ? `<form class="card card-pad" data-form="friday">
+    <div class="statgrid" style="margin:0 0 16px">
+      <div class="field">PNC available balance (before paying; includes that day's paychecks)${fridayField(i, "bank", "PNC available balance", i.bank ? i.bank["PNC balance"] : null)}</div>
       <div class="stat"><div class="l">Model expected today</div><div class="v">${money(META.expectedBankToday)}</div></div>
       <div class="stat"><div class="l">Latest PNC entry</div><div class="v">${lastBank ? money(lastBank["PNC balance"]) : "—"}</div><div class="hint">${lastBank ? fmtD(lastBank.Date) : "none yet"}</div></div>
     </div>
+    ${i.date && paychecksOn(i.date).length ? `<div class="pc-card"><div class="pc-head"><b>Paychecks on ${fmtD(i.date)}</b><span class="hint">Only if a paycheck was different — blank = expected.</span></div>${paycheckRows(i.date, i.editable)}</div>` : ""}
     <div class="table-wrap"><table class="data">
       <thead><tr><th>Card</th><th>Set as</th><th class="r">Before this Friday</th><th>Balance ${i.date ? shortD(i.date) : ""}</th><th>Minimum</th><th>Due</th><th>Note</th></tr></thead>
-      <tbody>${i.cards.map(d => { const sv = i.saved[d.Name], prev = DB.tblCardLog.filter(l => l["Card or loan"] === d.Name && isVal(l.Balance) && l.Date < i.date).at(-1); return `<tr>
-        <td><b>${esc(d.Name)}</b></td>
-        <td><span class="pill ${d["Expected category"] === "Active" ? "info" : "muted"}">${esc(d["Expected category"])}</span></td>
-        <td class="r money">${prev ? money(prev.Balance) : "—"}<div class="hint">${prev ? shortD(prev.Date) : ""}</div></td>
-        <td>${fridayField(i, `bal-${d.DebtID}`, `${d.Name} balance`, sv ? sv.Balance : null)}</td>
-        <td>${fridayField(i, `min-${d.DebtID}`, `${d.Name} minimum payment`, sv ? sv.Minimum : null, isVal(d["Latest minimum"]) ? `keep ${d["Latest minimum"]}` : "")}</td>
-        <td>${d["Due day"] ? `${d["Due day"]}th` : "—"}</td>
-        <td class="hint">${esc(d.Flag || "")}</td></tr>`; }).join("")}</tbody>
+      <tbody>${rows}</tbody>
     </table></div>
-    ${i.editable ? `<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center"><button class="btn primary" type="submit">Save Friday update</button><span class="hint">Saves one entry per card you filled in, plus the PNC balance, then locks them.</span></div>` : ""}
-  </form>
+    ${i.editable ? `<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center"><button class="btn primary" type="submit">Save Friday update</button><span class="hint">Saves every card you filled in, the PNC balance and any paycheck change, then locks them.</span></div>` : ""}
+  </form>` : ""}
   <section class="card card-pad"><div class="card-head"><h2>Recent entries</h2></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>Date</th><th>Card</th><th class="r">Balance</th><th class="r">Minimum</th><th class="r">Spending since last week</th></tr></thead>
-    <tbody>${DB.tblCardLog.filter(l => isVal(l.Balance)).slice().reverse().slice(0, 20).map(l => `<tr><td>${shortD(l.Date)}</td><td>${esc(l["Card or loan"])}</td><td class="r money">${money(l.Balance)}</td><td class="r money">${money(l.Minimum)}</td><td class="r money">${isVal(l.Spending) ? money(l.Spending) : "—"}</td></tr>`).join("")}</tbody></table></div>
+    <tbody>${DB.tblCardLog.filter(l => isVal(l.Balance)).slice().reverse().slice(0, 30).map(l => `<tr><td>${shortD(l.Date)}</td><td>${esc(l["Card or loan"])}</td><td class="r money">${money(l.Balance)}</td><td class="r money">${money(l.Minimum)}</td><td class="r money">${isVal(l.Spending) ? money(l.Spending) : "—"}</td></tr>`).join("")}</tbody></table></div>
   </section>`;
 }
 
@@ -340,7 +354,7 @@ function viewDebts() {
   return `${monthBar()}
   <section class="twocol">
     <div class="card card-pad">
-      <div class="card-head"><h2>${esc(bt.Name)} · balance transfer</h2><span class="pill info">${esc(bt["BT payment mode"])}</span></div>
+      <div class="card-head"><h2>${esc(bt.Name)} · balance transfer</h2><span class="pill info">${esc(btPlanText(bt))}</span></div>
       <div class="statgrid">
         <div class="stat"><div class="l">Balance</div><div class="v">${money(bt["Latest balance"])}</div></div>
         <div class="stat"><div class="l">Promo rate</div><div class="v">${(bt["Promo APR"] * 100).toFixed(2)}%</div></div>
@@ -351,7 +365,7 @@ function viewDebts() {
       </div>
       <div class="legend" style="margin-top:14px"><span><i class="sw" style="background:var(--series-1)"></i>Fixed ${money(bt["Fixed monthly payment"], 0)}/mo</span><span><i class="sw" style="background:var(--series-2)"></i>Payoff ${money(bt["Payoff payment"], 0)}/mo</span></div>
       <div class="chart-wrap" id="btChart"></div>
-      <p class="note">Switch the mode on the Debts tab of the workbook (BT payment mode). The plan follows whichever is set.</p>
+      <p class="note">John changes the plan in Friday update ▸ Detailed view (or on the Debts tab). The plan follows whichever is set.</p>
     </div>
     <div class="card card-pad">
       <div class="card-head"><h2>${esc(dad.Name)}</h2><span class="hint">0% interest · ${money(original, 0)} original</span></div>
@@ -366,7 +380,7 @@ function viewDebts() {
   </section>
   <section class="card card-pad"><div class="card-head"><h2>All cards</h2><span class="hint">Balances from the latest Friday update</span></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>Card</th><th>Set as</th><th class="r">APR</th><th class="r">Balance</th><th class="r">Minimum</th><th class="r">Due day</th><th>Flag</th></tr></thead><tbody>
-    ${DB.tblDebts.filter(d => d["Expected category"] !== "Loan").map(d => `<tr><td>${esc(d.Name)}</td><td><span class="pill ${d["Expected category"] === "Active" ? "info" : "muted"}">${esc(d["Expected category"])}</span></td><td class="r money">${d.APR === null ? "—" : (d.APR * 100).toFixed(2) + "%"}</td><td class="r money">${d["Latest balance"] === null ? "—" : money(d["Latest balance"])}</td><td class="r money">${money(d["Minimum used"])}</td><td class="r">${d["Due day"] ?? "—"}</td><td>${d.Flag ? `<span class="pill ${d.Flag === "Unexpected balance" ? "late" : "yellow"}">${esc(d.Flag)}</span>` : ""}</td></tr>`).join("")}
+    ${DB.tblDebts.filter(d => d.Name && CARD_CATS.includes(d["Expected category"])).map(d => `<tr><td>${esc(d.Name)}</td><td><span class="pill ${d["Expected category"] === "Active" ? "info" : "muted"}">${esc(d["Expected category"])}</span></td><td class="r money">${d.APR === null ? "—" : (d.APR * 100).toFixed(2) + "%"}</td><td class="r money">${d["Latest balance"] === null ? "—" : money(d["Latest balance"])}</td><td class="r money">${money(d["Minimum used"])}</td><td class="r">${d["Due day"] ?? "—"}</td><td>${d.Flag ? `<span class="pill ${d.Flag === "Unexpected balance" ? "late" : "yellow"}">${esc(d.Flag)}</span>` : ""}</td></tr>`).join("")}
     </tbody></table></div></section>`;
 }
 function lineChart(el, series, opts) {
@@ -416,7 +430,7 @@ function viewDetails() {
     ${DB.tblExportCardPlan.filter(c => c.RowID).map(c => `<tr><td>${c.Block}</td><td class="mono-s">${esc(c.RowID)}</td><td class="r money">${money(c["Extra placed"])}</td><td>${esc(c["Pay-from text"])}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No card extras in the plan.</td></tr>`}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Data connection</h2></div>
-    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Writes only tblRegister input columns (matched by RowID), new rows in tblCardLog, tblCashLog and tblOther, and tblMonths[Month closed?].</p></section>`;
+    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Writes only tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog / tblCashLog rows matched by date (a correction replaces that Friday's row); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
 }
 
 document.addEventListener("click", async e => {
@@ -438,6 +452,12 @@ document.addEventListener("click", async e => {
   if (act === "unlock-friday") { state.fri.unlocked = true; render(); const x = document.querySelector('[data-form="friday"] input'); if (x) x.focus(); }
   if (act === "lock-friday") { state.fri.unlocked = false; render(); }
   if (act === "clear-row") { state.openRow = null; await writeRow(row, { "Paid date": null, "Paid amount": null, "Extra paid date": null, "Extra paid amount": null, "Reason if different": null }, `Cleared the payment for ${esc(row.Bill)}`); }
+  if (act === "open-pay") { state.view = "month"; state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.scrollIntoView({ block: "center" }); }
+  if (act === "save-statement") await saveStatement(t.dataset.id);
+  if (act === "pay-clear") await clearPaycheck(t.dataset.person, t.dataset.date);
+  if (act === "pay-unlock") { state.fri.payUnlocked = t.dataset.date; render(); }
+  if (act === "bt-unlock") { state.btUnlocked = t.dataset.id; render(); }
+  if (act === "bt-cancel") { state.btUnlocked = null; render(); }
   if (act === "drill") { state.cat = state.cat === t.dataset.cat ? null : t.dataset.cat; render(); }
   if (act === "close-month") {
     await closeMonth(state.vm);
@@ -450,6 +470,8 @@ document.addEventListener("submit", async e => {
   const f = e.target;
   if (f.dataset.form === "pay") await submitPay(f);
   if (f.dataset.form === "friday") await saveFriday(new FormData(f), fridayInfo(state.fri.date));
+  if (f.dataset.form === "paychecks") await savePaychecks(new FormData(f), f.dataset.date);
+  if (f.dataset.form === "bt") await saveBT(f);
 });
 
 /* =============================================================================

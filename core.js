@@ -8,9 +8,11 @@
    READS : tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory,
            tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog,
            tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule
-   WRITES: tblRegister input columns (matched by RowID); tblCardLog / tblCashLog
-           rows matched by Date (+ card) — a correction REPLACES that Friday's row,
-           never adds a second one; tblOther new rows; tblMonths[Month closed?]
+   WRITES: tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog /
+           tblCashLog rows matched by Date (+ card) — a correction REPLACES that Friday's row,
+           never adds a second one; tblPaychecks[Actual amount] (Person + Deposit date);
+           tblDebts[BT payment mode, Fixed monthly payment] (DebtID); tblOther new rows;
+           tblMonths[Month closed?]
 
    change = { table, rowId, values }                  → update one row by its key
           = { table, match:{col:value}, values, upsert } → update the matching row (or add it)
@@ -24,11 +26,13 @@
 
 const TABLES = ["tblExportMeta", "tblExportPlan", "tblExportCardPlan", "tblExportHistory", "tblExportCategory", "tblExportChecks",
   "tblRegister", "tblDebts", "tblCardLog", "tblCashLog", "tblOther", "tblPaychecks", "tblMonths", "tblDadHistory", "tblDadSchedule"];
-const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month" };
+const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month", tblDebts: "DebtID" };
 const LOG_TABLES = ["tblCardLog", "tblCashLog", "tblOther"];
 /* Columns the dashboard is allowed to write. Anything else is refused, so a bug here can never overwrite a formula. */
 const WRITABLE = {
-  tblRegister: ["Paid date", "Paid amount", "Extra paid date", "Extra paid amount", "Reason if different", "Notes"],
+  tblRegister: ["Paid date", "Paid amount", "Extra paid date", "Extra paid amount", "Reason if different", "Notes", "Statement amount"],
+  tblPaychecks: ["Actual amount"],                         // paycheck override for one payday (blank = expected)
+  tblDebts: ["BT payment mode", "Fixed monthly payment"],  // balance-transfer plan switch (John, Detailed view only)
   tblMonths: ["Month closed?"],
   tblCardLog: ["Date", "Card or loan", "Balance", "Minimum", "Note"],
   tblCashLog: ["Date", "PNC balance", "Note"],
@@ -68,7 +72,8 @@ const ExcelSource = {
   },
   async write(change) {
     const allowed = WRITABLE[change.table] || [];
-    const rows = change.append || [{ ...(change.match || {}), ...change.values }];
+    // Only the values being written must be writable; match keys (e.g. a paycheck's Person + Deposit date) are just used to find the row.
+    const rows = change.append || [{ ...(change.upsert ? change.match : {}), ...change.values }];
     for (const r of rows) for (const k of Object.keys(r)) if (!allowed.includes(k)) throw new Error(`Not allowed to write ${change.table}[${k}]`);
     const isLog = LOG_TABLES.includes(change.table);
     return Excel.run(async ctx => {
@@ -187,8 +192,7 @@ function localRecalc(r) {
   const paid = (+r["Paid amount"] || 0) + (+r["Extra paid amount"] || 0);
   const before = (+r["Remaining must"] || 0) + (+r["Extra planned"] || 0);
   r["Paid total"] = paid;
-  if (r.Source === "Debt") r.Remaining = r["Paid date"] ? 0 : Math.max(0, r.Amount - paid);
-  else r.Remaining = Math.max(0, Math.round((r.Amount - paid) * 100) / 100);
+  r.Remaining = r["Paid date"] ? 0 : Math.max(0, Math.round((r.Amount - paid) * 100) / 100);   // a recorded payment settles the row
   r["Remaining must"] = Math.min(r.Remaining, Math.max(0, (r["Must pay"] || 0) - paid));
   if (r["Planned date"] && r.Remaining === 0) adjust[r["Planned date"]] = (adjust[r["Planned date"]] || 0) + before;
   if (r.Remaining === 0) { r["Payday amount"] = 0; r["Planned date"] = r["Planned date"]; }
@@ -257,14 +261,27 @@ const statusKey = () => `<div class="stkey" aria-label="What the colours mean"><
 const keyLine = () => `<p class="keyline"><span><i class="k-in"></i>You type here</span><span><i class="smark on">✓</i>Fills in automatically</span><span>🔒 Saved — unlock to change</span></p>`;
 
 /* Checklists (panel and full view) */
+/* ---- Cards on the Friday update: every switched-on card, every Friday (a $0 card is entered as 0).
+   Order: Active, then Balance Transfer, then $0 Balance; within each, highest latest saved balance first. */
+const CARD_CATS = ["Active", "Balance Transfer", "$0 Balance"];
+function latestSaved(name, onOrBefore) {
+  return DB.tblCardLog.filter(l => l["Card or loan"] === name && isVal(l.Balance) && (!onOrBefore || l.Date <= onOrBefore))
+    .reduce((best, l) => (!best || l.Date >= best.Date) ? l : best, null);
+}
+function fridayCards(date) {
+  return DB.tblDebts.filter(d => d.Name && d.Show === "Yes" && CARD_CATS.includes(d["Expected category"]))
+    .map(d => ({ d, bal: +((latestSaved(d.Name, date) || {}).Balance) || 0 }))
+    .sort((a, b) => CARD_CATS.indexOf(a.d["Expected category"]) - CARD_CATS.indexOf(b.d["Expected category"]) || b.bal - a.bal)
+    .map(x => x.d);
+}
 function fridayRoutine() {
-  const active = DB.tblDebts.filter(d => d["Expected category"] === "Active");
-  const weekAgo = isoOf(META.asOf.slice(0, 8) + "01", 1) && new Date(D(META.asOf) - 6 * 864e5).toISOString().slice(0, 10);
-  const cardsDone = active.every(d => d["Latest log date"] && d["Latest log date"] >= weekAgo);
+  const cards = fridayCards();
+  const weekAgo = new Date(D(META.asOf) - 6 * 864e5).toISOString().slice(0, 10);
+  const cardsDone = cards.every(d => d["Latest log date"] && d["Latest log date"] >= weekAgo);
   const bankDone = META.hasBankEntry === true && META.anchor >= weekAgo;
   const left = reg().filter(r => (+r["Payday amount"] || 0) > 0 && r.Remaining > 0).length;
   return [
-    { on: cardsDone, label: "Card balances updated this week", note: "Friday update tab" },
+    { on: cardsDone, label: "All card balances entered this week", note: "Friday update tab — every card, 0 if it's $0" },
     { on: bankDone, label: "PNC balance entered this week", note: "Friday update tab" },
     { step: true, label: "Pay the bills in the green box", note: "On the bank and card websites" },
     { on: left === 0, label: "Mark each one paid", note: left ? `${left} still to mark` : "All marked" },
@@ -338,7 +355,7 @@ function fridayPeriods(vm) {
   return list;
 }
 function fridayInfo(date) {
-  const cards = DB.tblDebts.filter(d => d["Expected category"] !== "Loan");
+  const cards = fridayCards(date);
   const saved = {};
   DB.tblCardLog.forEach(l => { if (l.Date === date && isVal(l.Balance)) saved[l["Card or loan"]] = l; });   // last one wins
   const bank = DB.tblCashLog.filter(c => c.Date === date && isVal(c["PNC balance"])).at(-1) || null;
@@ -367,31 +384,108 @@ function fridayField(i, name, label, saved, placeholder = "") {
   if (i.editable) return `<input type="number" step="0.01" min="0" inputmode="decimal" name="${name}" aria-label="${esc(label)}" value="${isVal(saved) ? saved : ""}" placeholder="${esc(placeholder)}">`;
   return isVal(saved) ? `<span class="locked-val" title="Saved — use Unlock to edit">${money(saved)}</span>` : `<span class="hint">—</span>`;
 }
+/* ---- Paycheck override (F6): Setup ▸ Paychecks ▸ Actual amount for one payday; blank = the expected amount. */
+const paychecksOn = date => DB.tblPaychecks.filter(p => p["Deposit date"] === date && p.Person);
+function paycheckRows(date, editable) {
+  const list = paychecksOn(date);
+  if (!list.length) return "";
+  return list.map((p, k) => {
+    const exp = +p.Amount || 0, act = isVal(p["Actual amount"]) ? +p["Actual amount"] : null;
+    const field = editable
+      ? `<input type="number" step="0.01" min="0" inputmode="decimal" name="pay-${k}" aria-label="${esc(p.Person)} paycheck amount" value="${act ?? ""}" placeholder="blank = ${money(exp)}">`
+      : (act !== null ? `<span class="locked-val" title="Saved — use Unlock to edit">${money(act)}</span>` : `<span class="auto-chip" title="Fills in automatically">${money(exp)} expected</span>`);
+    return `<div class="pc-row"><span class="pc-who"><i class="sw" style="background:${personColor(p.Person)}"></i><b>${esc(p.Person)}</b><small>expected ${money(exp)}</small></span>
+      <label class="p-in">${editable ? "Different amount?" : "Amount used"}${field}</label>
+      ${editable && act !== null ? `<button type="button" class="linkish" data-act="pay-clear" data-person="${esc(p.Person)}" data-date="${date}">Use expected</button>` : ""}</div>`;
+  }).join("");
+}
+function paycheckWrites(fd, date) {
+  const writes = [];
+  paychecksOn(date).forEach((p, k) => {
+    const v = fd.get(`pay-${k}`);
+    if (!isVal(v)) return;                                       // blank = keep (expected, or the saved override)
+    if (isVal(p["Actual amount"]) && +p["Actual amount"] === +v) return;
+    writes.push({ table: "tblPaychecks", match: { "Person": p.Person, "Deposit date": date }, values: { "Actual amount": +v } });
+  });
+  return writes;
+}
+/* Standalone paycheck form for future Fridays (full dashboard): plan a different amount ahead of time. */
+function paycheckForm(date) {
+  const list = paychecksOn(date); if (!list.length) return "";
+  const saved = list.some(p => isVal(p["Actual amount"])), open = !saved || state.fri.payUnlocked === date;
+  return `<form class="pc-card" data-form="paychecks" data-date="${date}">
+    <div class="pc-head"><b>Paychecks on ${fmtD(date)}</b>${saved && !open ? `<button type="button" class="btn small" data-act="pay-unlock" data-date="${date}">🔒 Unlock to edit</button>` : ""}</div>
+    ${paycheckRows(date, open)}
+    ${open ? `<div class="form-actions" style="margin-top:8px"><button class="btn primary small" type="submit">Save paychecks</button><span class="hint">Leave blank to use the expected amount.</span></div>` : ""}
+  </form>`;
+}
+async function savePaychecks(fd, date) {
+  const writes = paycheckWrites(fd, date);
+  if (!writes.length) { state.fri.payUnlocked = null; render(); toast("Nothing changed."); return; }
+  const ok = await guarded(async () => { for (const w of writes) await source.write(w); if (source.kind !== "sample") await reload(); else writes.forEach(applySamplePay); return true; });
+  if (ok) { state.fri.payUnlocked = null; toast(`Saved the paycheck amount${writes.length === 1 ? "" : "s"} for ${shortD(date)}. The plan uses ${writes.length === 1 ? "it" : "them"} now.`); }
+  render();
+}
+function applySamplePay(w) { const p = DB.tblPaychecks.find(x => x.Person === w.match.Person && x["Deposit date"] === w.match["Deposit date"]); if (p) { p["Actual amount"] = w.values["Actual amount"]; p["Amount used"] = isVal(w.values["Actual amount"]) ? w.values["Actual amount"] : p.Amount; } }
+async function clearPaycheck(person, date) {
+  const w = { table: "tblPaychecks", match: { "Person": person, "Deposit date": date }, values: { "Actual amount": null } };
+  const ok = await guarded(async () => { await source.write(w); if (source.kind !== "sample") await reload(); else applySamplePay(w); return true; });
+  render(); if (ok) toast(`${esc(person)}'s paycheck on ${shortD(date)} is back to the expected amount.`);
+}
+
+/* ---- Balance-transfer plan switch (G2-b/g): everyone sees it; only the Detailed view can change it. */
+const promoLabel = d => d["Promo end"] ? monthName(d["Promo end"], { month: "short", year: "numeric" }) : "promo end";
+const btPlanText = d => d["BT payment mode"] === "Payoff by promo end"
+  ? `Plan uses: pay off by ${promoLabel(d)} — ${money(d["Payoff payment"])}/month now`
+  : `Plan uses: Fixed ${money(d["Fixed monthly payment"])}/month`;
+function btForm(d) {
+  if (state.btUnlocked !== d.DebtID) return `<div class="bt-line"><span>${esc(btPlanText(d))}</span><button type="button" class="btn small" data-act="bt-unlock" data-id="${esc(d.DebtID)}">Change plan</button></div>`;
+  const payoff = d["BT payment mode"] === "Payoff by promo end";
+  return `<form class="bt-form" data-form="bt" data-id="${esc(d.DebtID)}">
+    <label class="bt-opt"><input type="radio" name="mode" value="Fixed" ${payoff ? "" : "checked"}> Fixed <input type="number" step="5" min="0" name="fixed" value="${+d["Fixed monthly payment"] || 500}" aria-label="Fixed monthly payment"> a month <small>still owed at ${esc(promoLabel(d))}: about ${money(d["Owed at promo end"], 0)}</small></label>
+    <label class="bt-opt"><input type="radio" name="mode" value="Payoff by promo end" ${payoff ? "checked" : ""}> Pay off by ${esc(promoLabel(d))}: <b class="money">${money(d["Payoff payment"])}</b> a month now <small>recalculated every Friday from the current balance</small></label>
+    <div class="form-actions"><button class="btn primary small" type="submit">Save plan</button><button class="btn small" type="button" data-act="bt-cancel">Cancel</button></div>
+  </form>`;
+}
+async function saveBT(f) {
+  const fd = new FormData(f), id = f.dataset.id, mode = fd.get("mode"), fixed = +fd.get("fixed") || 0;
+  const ok = await guarded(async () => {
+    await source.write({ table: "tblDebts", rowId: id, values: { "BT payment mode": mode, "Fixed monthly payment": fixed } });
+    if (source.kind !== "sample") await reload(); else Object.assign(debtsById[id], { "BT payment mode": mode, "Fixed monthly payment": fixed });
+    return true;
+  });
+  state.btUnlocked = null; render();
+  if (ok) toast(mode === "Fixed" ? `Balance transfer plan: Fixed ${money(fixed)} a month.` : `Balance transfer plan: pay off by the promo end.`);
+}
+
 async function saveFriday(fd, i) {
   const writes = [];
   i.cards.forEach(d => {
     const b = fd.get(`bal-${d.DebtID}`), m = fd.get(`min-${d.DebtID}`);
     if (!isVal(b)) return;                                     // blank = skip (or keep the saved value)
-    const old = i.saved[d.Name], vals = { "Balance": +b, "Minimum": isVal(m) ? +m : null, "Note": "Dashboard" };
+    const old = i.saved[d.Name], vals = { "Balance": +b, "Minimum": isVal(m) ? +m : (old ? old.Minimum : null), "Note": "Dashboard" };
     if (old && +old.Balance === vals.Balance && String(old.Minimum ?? "") === String(vals.Minimum ?? "")) return;   // unchanged
     writes.push({ table: "tblCardLog", match: { "Date": i.date, "Card or loan": d.Name }, upsert: true, values: vals });
   });
   const bank = fd.get("bank");
   if (isVal(bank) && !(i.bank && +i.bank["PNC balance"] === +bank)) writes.push({ table: "tblCashLog", match: { "Date": i.date }, upsert: true, values: { "PNC balance": +bank, "Note": "Dashboard" } });
+  const pays = paycheckWrites(fd, i.date);
+  writes.push(...pays);
   if (!writes.length) {
     if (i.state === "saved") { state.fri.unlocked = false; render(); toast("Nothing changed — still locked."); return true; }
     toast("Nothing to save — type at least one balance."); return false;
   }
   const ok = await guarded(async () => {
     for (const w of writes) await source.write(w);
-    if (source.kind === "sample") writes.filter(w => w.table === "tblCardLog").forEach(w => { const d = DB.tblDebts.find(x => x.Name === w.match["Card or loan"]); d["Latest balance"] = w.values.Balance; d["Latest log date"] = i.date; if (w.values.Minimum !== null) d["Latest minimum"] = w.values.Minimum; });
+    if (source.kind === "sample") { writes.filter(w => w.table === "tblCardLog").forEach(w => { const d = DB.tblDebts.find(x => x.Name === w.match["Card or loan"]); d["Latest balance"] = w.values.Balance; d["Latest log date"] = i.date; if (w.values.Minimum !== null) d["Latest minimum"] = w.values.Minimum; }); pays.forEach(applySamplePay); }
     else await reload();
     return true;
   });
   if (ok) state.fri.unlocked = false;
   render();
-  const nCards = writes.filter(w => w.table === "tblCardLog").length, nBank = writes.length - nCards;
-  if (ok) toast(`Saved ${nCards ? `${nCards} card balance${nCards === 1 ? "" : "s"}` : ""}${nCards && nBank ? " and " : ""}${nBank ? "the PNC balance" : ""} for ${shortD(i.date)}. They're locked now.`);
+  const nCards = writes.filter(w => w.table === "tblCardLog").length, nBank = writes.filter(w => w.table === "tblCashLog").length, nPay = pays.length;
+  const parts = [nCards ? `${nCards} card balance${nCards === 1 ? "" : "s"}` : "", nBank ? "the PNC balance" : "", nPay ? `${nPay} paycheck amount${nPay === 1 ? "" : "s"}` : ""].filter(Boolean);
+  if (ok) toast(`Saved ${parts.join(" and ")} for ${shortD(i.date)}. They're locked now.`);
   return ok;
 }
 async function closeMonth(vm) {
@@ -404,30 +498,94 @@ async function closeMonth(vm) {
   if (ok) toast(`${monthName(vm, { month: "long" })} marked closed`);
 }
 
-/* Record-payment form (same form in the panel and the full view). */
-function payForm(r) {
-  const hasFirst = !!r["Paid date"];
-  const amt = hasFirst ? r["Paid amount"] : (+r["Payday amount"] || +r.Remaining || r.Amount);
-  return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}<form class="payform" data-form="pay" data-id="${esc(r.RowID)}">
-    <label class="field">Date paid<input type="date" id="pf-date-${esc(r.RowID)}" name="date" value="${hasFirst ? r["Paid date"] : META.asOf}" required></label>
-    <label class="field">Amount paid<input type="number" step="0.01" min="0" id="pf-amt-${esc(r.RowID)}" name="amount" value="${amt}" required></label>
-    ${r.Source === "Bill" ? `<label class="field">Reason if different<select id="pf-reason-${esc(r.RowID)}" name="reason"><option value="">—</option>${REASONS.map(x => `<option ${r["Reason if different"] === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>` : ""}
-    <label class="field note">Note<input type="text" id="pf-note-${esc(r.RowID)}" name="note" value="${esc(r.Notes || "")}" placeholder="optional"></label>
-    ${hasFirst ? `<label class="field">Extra payment<input type="number" step="0.01" min="0" id="pf-extra-${esc(r.RowID)}" name="extra" value="${r["Extra paid amount"] || ""}" placeholder="0.00"></label>` : ""}
-    <div class="form-actions"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" data-act="close-row">Cancel</button>${hasFirst ? `<button class="btn ghost" type="button" data-act="clear-row" data-id="${esc(r.RowID)}">Clear payment</button>` : ""}</div>
-    <p class="form-msg" id="pf-msg-${esc(r.RowID)}">Budget for this bill: ${money(r.Budget)}. If you pay a different amount by more than ${money(META.varianceAmount, 0)} and ${Math.round(META.variancePct * 100)}%, pick a reason.</p>
-  </form>`;
+/* =========================================================================
+   Minimum / Suggested (from the workbook) and the record-payment form.
+   Minimum   = the least that can be paid (bills: the bill amount; cards & BT: the Friday minimum; loans: the payment)
+   Suggested = what the plan says to pay (cards: minimum + spare cash placed by the planner)
+   Rules (S1): a card, balance-transfer or loan payment below the minimum can't be saved;
+   between the minimum and the suggested amount it saves with a note.
+   ========================================================================= */
+const typeOf = r => r["Amount type"] || (r.Source === "Debt" ? "Card" : "Fixed");
+const typeTag = r => { const t = typeOf(r); return `<span class="typ ${t === "Variable" ? "var" : t === "Card" ? "card" : "fixed"}">${t === "Variable" ? "VARIABLE" : t === "Card" ? "CARD" : "FIXED"}</span>`; };
+const minOf = r => (r["Paid date"] && +r["Min at payment"] > 0) ? +r["Min at payment"] : (+r.Minimum || 0);
+const sugOf = r => +r.Suggested || 0;
+const basisOf = r => r["Suggested basis"] || "";
+const blocksBelowMin = r => r.Source === "Debt";
+/* Variance on a paid bill (paid − budget), e.g. "−$0.30 vs budget"; empty when none. */
+const varText = r => (r.Source === "Bill" && r.Variance !== null && r.Variance !== undefined && r.Variance !== "" && Math.abs(+r.Variance) >= 0.005) ? `${+r.Variance > 0 ? "+" : "−"}${money(Math.abs(+r.Variance)).replace("−", "")} vs budget` : "";
+/* Mark paid is a one-tap shortcut only when the payday amount is safe to record as-is. */
+const quickPayOk = r => !(blocksBelowMin(r) && (+r["Payday amount"] || 0) < minOf(r) - 0.005) && !(typeOf(r) === "Variable" && !isVal(r["Statement amount"]));
+function payCheck(r, total) {
+  const min = minOf(r), sug = sugOf(r), cents = x => Math.round(x * 100) / 100;
+  if (blocksBelowMin(r) && total < min - 0.005)
+    return { block: true, html: `<div class="errbox">✕ Can't save ${money(total)}. ${r.Rule === "Loan" ? "The monthly payment" : "The minimum due"} is ${money(min)} — pay at least that so it isn't late.</div>` };
+  if (typeOf(r) === "Card" && sug > 0 && total < sug - 0.005)
+    return { block: false, html: `<div class="warnbox">⚠ ${money(total)} is ${min > 0 ? `above the ${money(min)} minimum but ` : ""}${money(cents(sug - total))} below the suggested amount. You can save it; the ${money(cents(sug - total))} stays in PNC and the plan re-plans it.</div>` };
+  return { block: false, html: "" };
 }
+function payGuide(r) {
+  const d = r.Source === "Debt" ? debtsById[r.ItemID] || {} : null, t = typeOf(r);
+  const line = (label, v, why, rec) => `<span class="${rec ? "rec" : ""}">${rec ? `<b>${label}</b>` : label}</span><span class="v ${rec ? "rec" : ""}">${money(v)}</span><button type="button" class="fill" data-act="fill-amt" data-v="${v}">Use</button>${why ? `<span class="why">${why}</span>` : ""}`;
+  let rows;
+  if (t === "Card") {
+    rows = line("Minimum due", minOf(r)) + line("Suggested", sugOf(r), esc(basisOf(r)) + (d["BT payment mode"] ? ` · ${esc(btPlanText(d))}` : ""), true);
+    if (isVal(d["Latest balance"])) rows += line(`Full balance (${shortD(d["Latest log date"])})`, +d["Latest balance"]);
+  } else if (r.Source === "Debt") rows = line("Monthly payment", sugOf(r), "fixed", true);
+  else rows = line(t === "Variable" ? (isVal(r["Statement amount"]) ? "Bill amount (statement)" : "Budget estimate") : "Bill amount", sugOf(r) || r.Amount, t === "Variable" && !isVal(r["Statement amount"]) ? "Type the real amount from the statement below when it arrives." : "", true);
+  return `<div class="guide"><h4>Payment guide</h4><div class="gl">${rows}</div></div>`;
+}
+function payForm(r) {
+  const hasFirst = !!r["Paid date"], t = typeOf(r), min = minOf(r), pd = +r["Payday amount"] || 0;
+  const amt = hasFirst ? r["Paid amount"] : Math.round((r.Source === "Debt" ? (pd >= min - 0.005 && pd > 0 ? pd : sugOf(r) || min) : (pd || +r.Remaining || r.Amount)) * 100) / 100;
+  const chk = payCheck(r, (+amt || 0) + (+r["Extra paid amount"] || 0) * (hasFirst ? 1 : 0)), id = esc(r.RowID);
+  return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}
+  <div class="payarea">${payGuide(r)}
+  <form class="payform" data-form="pay" data-id="${id}">
+    ${t === "Variable" ? `<label class="field">Bill amount from statement<input type="number" step="0.01" min="0" id="pf-stmt-${id}" name="statement" value="${r["Statement amount"] ?? ""}" placeholder="when it arrives"></label>` : ""}
+    <label class="field">Date paid<input type="date" id="pf-date-${id}" name="date" value="${hasFirst ? r["Paid date"] : META.asOf}" required></label>
+    <label class="field">Amount paid<input type="number" step="0.01" min="0" id="pf-amt-${id}" name="amount" value="${amt}" required class="${chk.block ? "bad" : ""}"></label>
+    ${r.Source === "Bill" ? `<label class="field">Reason if different<select id="pf-reason-${id}" name="reason"><option value="">—</option>${REASONS.map(x => `<option ${r["Reason if different"] === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>` : ""}
+    <label class="field note">Note<input type="text" id="pf-note-${id}" name="note" value="${esc(r.Notes || "")}" placeholder="optional"></label>
+    ${hasFirst ? `<label class="field">Extra payment<input type="number" step="0.01" min="0" id="pf-extra-${id}" name="extra" value="${r["Extra paid amount"] || ""}" placeholder="0.00"></label>` : ""}
+    <div class="pf-check" id="pf-check-${id}">${chk.html}</div>
+    <div class="form-actions"><button class="btn primary" type="submit" ${chk.block ? "disabled" : ""}>Save</button><button class="btn" type="button" data-act="close-row">Cancel</button>${t === "Variable" && !hasFirst ? `<button class="btn ghost" type="button" data-act="save-statement" data-id="${id}">Save statement only</button>` : ""}${hasFirst ? `<button class="btn ghost" type="button" data-act="clear-row" data-id="${id}">Clear payment</button>` : ""}</div>
+    ${r.Source === "Bill" ? `<p class="form-msg" id="pf-msg-${id}">Budget for this bill: ${money(r.Budget)}. If you pay a different amount by more than ${money(META.varianceAmount, 0)} and ${Math.round(META.variancePct * 100)}%, pick a reason.</p>` : ""}
+  </form></div>`;
+}
+/* Live check while typing; the "Use" buttons fill the amount. */
+function recheckPay(f) {
+  const row = reg().find(r => r.RowID === f.dataset.id); if (!row) return;
+  const total = (+f.querySelector('[name="amount"]').value || 0) + (+(f.querySelector('[name="extra"]') || {}).value || 0);
+  const chk = payCheck(row, total);
+  f.querySelector(".pf-check").innerHTML = chk.html;
+  f.querySelector('[name="amount"]').classList.toggle("bad", chk.block);
+  f.querySelector('button[type="submit"]').disabled = chk.block;
+  f.closest(".payarea").querySelectorAll(".fill").forEach(b => b.classList.toggle("on", Math.abs(+b.dataset.v - total) < 0.005));
+  return chk;
+}
+document.addEventListener("input", e => { const f = e.target.closest('form[data-form="pay"]'); if (f && (e.target.name === "amount" || e.target.name === "extra")) recheckPay(f); });
+document.addEventListener("click", e => {
+  const b = e.target.closest('[data-act="fill-amt"]'); if (!b) return;
+  const f = b.closest(".payarea").querySelector('form[data-form="pay"]'); if (!f) return;
+  f.querySelector('[name="amount"]').value = (+b.dataset.v).toFixed(2); recheckPay(f);
+});
 
 async function submitPay(f) {
   const row = reg().find(r => r.RowID === f.dataset.id), fd = new FormData(f);
   const amount = +fd.get("amount"), extra = fd.get("extra") ? +fd.get("extra") : null, reason = fd.get("reason") || null;
   const total = amount + (extra || 0), diff = total - row.Budget;
+  if (recheckPay(f).block) return;
   const needs = row.Source === "Bill" && Math.abs(diff) > META.varianceAmount && Math.abs(diff) > META.variancePct * row.Budget;
   if (needs && !reason) { const m = $(`#pf-msg-${CSS.escape(row.RowID)}`); m.textContent = `That's ${money(Math.abs(diff))} ${diff > 0 ? "over" : "under"} the budget. Pick a reason from the list, then save.`; m.style.fontWeight = "600"; return; }
   const values = { "Paid date": fd.get("date"), "Paid amount": amount, "Notes": fd.get("note") || null };
   if (row.Source === "Bill") values["Reason if different"] = reason;
+  if (f.querySelector('[name="statement"]')) { const st = fd.get("statement"); values["Statement amount"] = isVal(st) ? +st : null; }
   if (f.querySelector('[name="extra"]')) { values["Extra paid amount"] = extra; values["Extra paid date"] = extra ? fd.get("date") : null; }
   state.openRow = null;
   await writeRow(row, values, `Saved ${esc(row.Bill)} · ${money(total)} on ${shortD(fd.get("date"))}`);
+}
+async function saveStatement(id) {
+  const f = document.querySelector(`form[data-form="pay"][data-id="${CSS.escape(id)}"]`), row = reg().find(r => r.RowID === id);
+  const v = f.querySelector('[name="statement"]').value;
+  await writeRow(row, { "Statement amount": isVal(v) ? +v : null }, isVal(v) ? `Saved the ${esc(row.Bill)} statement: ${money(+v)}. The plan uses it now.` : `Cleared the ${esc(row.Bill)} statement amount.`);
 }
