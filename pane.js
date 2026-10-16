@@ -23,7 +23,7 @@ const pKpi = (label, value, sub, cls = "") => `<div class="p-kpi"><div class="kp
 
 function paneToday() {
   const vm = monthKey(META.asOf), k = kpis(vm), cur = META.currentPayday, curPlan = planFor(cur);
-  const payRows = reg().filter(r => (+r["Payday amount"] || 0) > 0 || (r["Paid date"] === META.asOf && r.Remaining <= 0 && r["Paid total"] > 0));
+  const payRows = reg().filter(r => (+r["Payday amount"] || 0) > 0 || (effDate(r) === META.asOf && isPaid(r)));
   const toPay = payRows.filter(r => r.Remaining > 0);
   const routine = fridayRoutine();
   const nextP = META.nextPayday, nextRows = reg().filter(r => r["Planned date"] === nextP && r.Remaining > 0);
@@ -36,9 +36,10 @@ function paneToday() {
       const done = r.Remaining <= 0, st = status(r);
       return `<li class="${done ? "done" : ""}">
         <div class="p-li-main"><div class="pl-name">${esc(r.Bill)}</div>
-          <div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span></div></div>
+          <div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}<span>due ${shortD(r["Due date"])}</span></div></div>
         <div class="p-li-side"><div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
-          ${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
+          ${done ? (r["Paid date"] ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
+                 : `<button class="btn small ghost" data-act="open-pay" data-id="${esc(r.RowID)}" aria-label="Record ${esc(r.Bill)} payment">Record payment</button>`)
                  : quickPayOk(r) ? `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`
                  : `<button class="btn small primary" data-act="open-pay" data-id="${esc(r.RowID)}" aria-label="Record ${esc(r.Bill)} payment">Record payment</button>`}</div>
       </li>`; }).join("")}</ul>` : `<p class="empty">Nothing to pay from this payday.</p>`}
@@ -89,8 +90,9 @@ function paneFriday() {
   <form data-form="friday" class="p-stack">
     ${i.date ? fridayBanner(i) : ""}
     <section class="p-card p-pad">
-      <label class="p-in big">PNC available balance${fridayField(i, "bank", "PNC available balance", i.bank ? i.bank["PNC balance"] : null)}</label>
-      <p class="hint" style="margin:6px 0 0">Use PNC's <b>available</b> balance, before paying today's bills. It includes today's paychecks. The plan expected ${money(META.expectedBankToday)} today.</p>
+      <label class="p-in big">${esc(PNC_LABEL)}${fridayField(i, "bank", "PNC available balance", i.bank ? i.bank["PNC balance"] : null)}</label>
+      <p class="hint" style="margin:6px 0 0">The plan expected ${money(META.expectedBankToday)} today.</p>
+      ${midweekCard(i.bank)}
     </section>
     ${pcs ? `<section class="p-card p-pad"><h3 class="p-h">Paychecks this Friday</h3>${pcs}<p class="hint" style="margin:6px 0 0">Only if a paycheck was different. Blank = the expected amount.</p></section>` : ""}
     <section class="p-card">
@@ -105,9 +107,9 @@ function paneFriday() {
 function paneBills() {
   const vm = state.vm;
   let rows = viewRows(vm).sort((a, b) => GROUP_ORDER.indexOf(groupOf(a, vm)) - GROUP_ORDER.indexOf(groupOf(b, vm)) || (a["Due date"] < b["Due date"] ? -1 : 1));
-  const counts = { todo: rows.filter(r => r.Remaining > 0 || status(r).c === "info").length, paid: rows.filter(r => r.Remaining <= 0 && r["Paid total"] > 0).length, all: rows.length };
+  const counts = { todo: rows.filter(r => r.Remaining > 0 || status(r).c === "info").length, paid: rows.filter(isPaid).length, all: rows.length };
   if (state.billFilter === "todo") rows = rows.filter(r => r.Remaining > 0 || status(r).c === "info");
-  if (state.billFilter === "paid") rows = rows.filter(r => r.Remaining <= 0 && r["Paid total"] > 0);
+  if (state.billFilter === "paid") rows = rows.filter(isPaid);
   let html = "", g = null;
   for (const r of rows) {
     const grp = groupOf(r, vm);
@@ -116,8 +118,8 @@ function paneBills() {
     html += `<li class="p-bill ${open ? "open" : ""}">
       <button class="p-bill-btn" ${st.c === "info" ? `data-act="go-pane" data-pane="friday"` : `data-act="open-row" data-id="${esc(r.RowID)}"`} aria-expanded="${open}">
         <span class="pill st ${st.c}">${esc(st.t)}</span>
-        <span class="p-bill-name">${esc(r.Bill)} ${typeTag(r)}<small>${r["Paid date"] ? `🔒 Paid ${shortD(r["Paid date"])} · ${open ? "unlocked" : "tap to unlock"}` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
-        ${r["Paid date"] ? `<span class="amts"><span class="sug">${money(r["Paid total"])}</span><span class="sub">${varText(r) ? esc(varText(r)) : "paid"}</span></span>`
+        <span class="p-bill-name">${esc(r.Bill)} ${typeTag(r)}${autoTag(r)}<small>${r["Paid date"] ? `🔒 Paid ${shortD(r["Paid date"])} · ${open ? "unlocked" : "tap to unlock"}` : isAutopaid(r) ? `Autopaid ${shortD(effDate(r))} · tap to record the real amount` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
+        ${isPaid(r) ? `<span class="amts"><span class="sug">${money(r["Paid total"])}</span><span class="sub">${varText(r) ? esc(varText(r)) : r["Paid date"] ? "paid" : "autopaid"}</span></span>`
           : st.c === "info" ? `<span class="amts"><span class="sub">enter balance</span></span>`
           : `<span class="amts"><span class="sug">${money(sugOf(r))}</span><span class="sub">${typeOf(r) === "Card" ? `min <b>${money(minOf(r))}</b>` : esc(basisOf(r))}</span></span>`}
       </button>
