@@ -399,3 +399,19 @@ table.bills td.amt.sug { font-weight: 600; }
 .bt-opt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
 .bt-opt input[type="number"] { background: var(--input); border: 1.5px solid var(--input-line); border-radius: 7px; padding: 5px 8px; width: 100px; font-family: var(--mono); }
 .bt-opt small { color: var(--ink-3); width: 100%; padding-left: 24px; }
+
+/* Known amount (Set amount) — Variable bills. Known = solid green; Estimate = dashed grey (deliberately unlike Autopaid's blue). */
+.tag.known, .tag.est { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; vertical-align: middle; white-space: nowrap; font-family: var(--sans); }
+.tag.known { background: var(--accent-soft); color: var(--accent-deep); border: 1px solid var(--accent); }
+.tag.est { background: transparent; color: var(--ink-3); border: 1px dashed #9aa39d; }
+.sub .tag.known, .sub .tag.est { margin-left: 0; }
+.kn-diff { display: block; font-size: 11px; color: var(--warn-ink); font-family: var(--sans); font-weight: 600; margin-top: 2px; white-space: nowrap; }
+.kn-line { font-size: 13px; color: var(--ink-2); }
+.kn-line .linkish { margin-left: 6px; }
+.pf-known { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.pf-known[hidden] { display: none; }
+.kn-upd { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.row-acts { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.amtform .form-msg.blank { color: var(--ink-3); }
+.pane .kn-diff { white-space: normal; max-width: 8.5em; margin-left: auto; text-align: right; }
+.pane .kn-diff span { white-space: nowrap; }
