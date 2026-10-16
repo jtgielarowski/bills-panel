@@ -32,8 +32,8 @@ function monthBar(extra = "") {
 
 /* ---------------- This month */
 function viewMonth() {
-  const vm = state.vm, k = kpis(vm), cur = META.currentPayday;
-  const payRows = reg().filter(r => (+r["Payday amount"] || 0) > 0 || (r["Paid date"] === META.asOf && r.Remaining <= 0 && r["Paid total"] > 0));
+  const vm = state.vm, k = { ...kpis(vm), midweek: midweekOf(state.vm) }, cur = META.currentPayday;
+  const payRows = reg().filter(r => (+r["Payday amount"] || 0) > 0 || (effDate(r) === META.asOf && isPaid(r)));
   const isCurrentMonth = monthKey(cur) === vm || monthKey(META.asOf) === vm;
   const curPlan = planFor(cur);
   const routine = fridayRoutine();
@@ -47,9 +47,10 @@ function viewMonth() {
       ${payRows.length ? `<ul class="payday-list">${payRows.map(r => {
         const done = r.Remaining <= 0, st = status(r);
         return `<li class="${done ? "done" : ""}">
-          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span><span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
+          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}<span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
           <div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
-          <div>${done ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>` :
+          <div>${done ? (r["Paid date"] ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
+              : `<button class="btn small ghost" data-act="open-pay" data-id="${esc(r.RowID)}" title="Autopaid — enter the real amount if it was different">Record payment</button>`) :
             quickPayOk(r) ? `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`
             : `<button class="btn small primary" data-act="open-pay" data-id="${esc(r.RowID)}">Record payment</button>`}</div>
         </li>`; }).join("")}</ul>` : `<p class="empty">Nothing left to pay from this payday.</p>`}
@@ -78,6 +79,7 @@ function viewMonth() {
     ${kpi("Bills paid", `${k.paidN} of ${k.total}`, "Includes last month's leftovers", "Green rows in the bill list.")}
     ${kpi("Needs attention", `${k.late} late`, `${k.soon} more due within ${META.soonOrangeDays} days`, "Dark-red and orange rows below.", k.late ? "v-bad" : "")}
     ${kpi("Lowest balance ahead", money(k.low ? k.low["Cash after"] : null), k.low ? `${fmtD(k.low.Payday)} · cushion ${money(META.cushion, 0)} ${k.low["Cash after"] >= META.cushion ? "✓" : "— short"}` : "", "The tightest point between now and the end of next month.", k.low && k.low["Cash after"] < META.cushion ? "v-bad" : "v-good")}
+    ${kpi("Mid-week spend", money(k.midweek), midweekSub(k.midweek), "PNC money spent between Fridays that isn't a recorded bill (from the Friday PNC entries). Not part of the bill totals.")}
   </section>
 
   <section class="card card-pad">
@@ -98,6 +100,9 @@ function viewMonth() {
     <div class="card card-pad"><div class="card-head"><h2>This month's story</h2></div><p class="story">${story(vm, k)}</p></div>
   </section>`;
 }
+/* Mid-week spend for the month (tblExportHistory) — shown on its own, never added to bill totals. */
+const midweekOf = vm => { const h = DB.tblExportHistory.find(x => x.Month === vm); return h && isVal(h["Mid-week spend"]) ? +h["Mid-week spend"] : null; };
+const midweekSub = v => v === null ? "Needs two Friday PNC entries" : v > 0.005 ? "spent more than recorded" : v < -0.005 ? "more cash than expected" : "matches what was recorded";
 const kpi = (label, value, sub, cap, cls = "") => `<div class="card kpi"><div class="kpi-label">${label}</div><div class="kpi-value ${cls}">${value}</div><div class="kpi-sub">${sub}</div><div class="kpi-cap">${cap}</div></div>`;
 
 function slot(p) {
@@ -136,16 +141,16 @@ function billTable(vm) {
     const flag = r.Source === "Debt" && (debtsById[r.ItemID] || {}).Flag === "Unexpected balance";
     const open = state.openRow === r.RowID;
     html += `<tr>
-      <td><span class="pill st ${st.c}">${esc(st.t)}</span>${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
+      <td><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
       <td><div class="b-name">${esc(r.Bill)} ${typeTag(r)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
       <td>${shortD(r["Due date"])}${r.Rule === "End of service month" ? `<div class="b-detail">pay by ${shortD(r["Pay by"])}</div>` : ""}</td>
       <td class="amt">${st.c === "info" ? "—" : money(minOf(r))}</td>
-      <td class="amt sug">${st.c === "info" ? "—" : r["Paid date"] ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : r["Paid date"] ? "paid" : esc(basisOf(r))}</span></td>
+      <td class="amt sug">${st.c === "info" ? "—" : isPaid(r) ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : isPaid(r) ? (r["Paid date"] ? "paid" : "autopaid") : esc(basisOf(r))}</span></td>
       <td>${esc(r["Pay from"] || "")}</td>
       <td class="b-why detail-only">${esc(r.Why || "")}</td>
       <td class="detail-only mono-s">${esc(r.Rule || "")}<br>must ${money(r["Remaining must"])} · extra ${money(r["Extra planned"])}${+r["Extra unfunded"] > 0 ? ` · unfunded ${money(r["Extra unfunded"])}` : ""}</td>
       <td>${cm ? `<span class="auto-chip" title="Fills in automatically from the paid or planned date">${monthName(cm, { month: "short" })} cash</span>` : `<span class="hint">—</span>`}</td>
-      <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : "—"}${varText(r) ? `<div class="b-detail">${esc(varText(r))}</div>` : ""}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
+      <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : isAutopaid(r) ? `${shortD(effDate(r))}<span class="money">${money(effAmt(r))}</span><div class="b-detail">autopay</div>` : "—"}${varText(r) ? `<div class="b-detail">${esc(varText(r))}</div>` : ""}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
       <td class="r">${st.c === "info" ? `<button class="btn small" data-act="go-friday">Enter balance</button>` :
         `<button class="btn small ${r.Remaining > 0 ? "" : "ghost"}" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${r["Paid date"] ? (open ? "Close" : "🔒 Unlock to edit") : "Record payment"}</button>`}</td>
     </tr>`;
@@ -176,7 +181,7 @@ function story(vm, k) {
   const spend = sum(DB.tblCardLog.filter(l => monthKey(l.Date) === vm), l => l.Spending);
   return `In ${monthName(vm, { month: "long" })} we expect <b>${money(k.comingIn, 0)}</b> to come in and <b>${money(k.goingOut, 0)}</b> to go out with this month's money, leaving about <b>${money(k.left, 0)}</b> in PNC at month end.
    ${early > 0 ? `${money(early, 0)} of that pays next month's bills early. ` : ""}${carried > 0 ? `${money(carried, 0)} covers last month's bills paid this month. ` : ""}
-   ${spend ? `Cards picked up ${money(spend, 0)} of new spending so far. ` : ""}So far ${k.paidN} of ${k.total} bills are paid.`;
+   ${spend ? `Cards picked up ${money(spend, 0)} of new spending so far. ` : ""}${k.midweek > 0.005 ? `Mid-week spending from PNC (money not tied to a recorded bill) is ${money(k.midweek, 0)} so far. ` : k.midweek < -0.005 ? `PNC has ${money(-k.midweek, 0)} more than the recorded bills and paychecks predicted. ` : ""}So far ${k.paidN} of ${k.total} bills are paid.`;
 }
 
 /* ---------------- cash-build chart */
@@ -255,7 +260,7 @@ function viewFriday() {
   ${state.detailed ? DB.tblDebts.filter(d => d.Name && d["Expected category"] === "Balance Transfer").map(d => `<section class="card card-pad"><div class="card-head"><h2>${esc(d.Name)} · payment plan</h2><span class="hint">Detailed view only · balance to plan ${money(d["Balance to plan"])} · ${d["Months left"]} payments to ${esc(promoLabel(d))}</span></div>${btForm(d)}</section>`).join("") : ""}
   ${i.state !== "future" ? `<form class="card card-pad" data-form="friday">
     <div class="statgrid" style="margin:0 0 16px">
-      <div class="field">PNC available balance (before paying; includes that day's paychecks)${fridayField(i, "bank", "PNC available balance", i.bank ? i.bank["PNC balance"] : null)}</div>
+      <div class="field">${esc(PNC_LABEL)}${fridayField(i, "bank", "PNC available balance", i.bank ? i.bank["PNC balance"] : null)}${midweekCard(i.bank)}</div>
       <div class="stat"><div class="l">Model expected today</div><div class="v">${money(META.expectedBankToday)}</div></div>
       <div class="stat"><div class="l">Latest PNC entry</div><div class="v">${lastBank ? money(lastBank["PNC balance"]) : "—"}</div><div class="hint">${lastBank ? fmtD(lastBank.Date) : "none yet"}</div></div>
     </div>
@@ -324,8 +329,8 @@ function viewBudget() {
     <div class="card-head"><h2>Month by month</h2><span class="hint">Bills budget vs. paid for each bill's month</span></div>
     <div class="legend"><span><i class="sw" style="background:var(--neutral-mark)"></i>Bills budget</span><span><i class="sw" style="background:var(--series-1)"></i>Bills paid</span></div>
     <div class="chart-wrap" id="trend"></div>
-    <div class="table-wrap"><table class="data" style="margin-top:12px"><thead><tr><th>Month</th><th class="r">Income</th><th class="r">Paid out (cash)</th><th class="r">Bills budget</th><th class="r">Bills paid</th><th class="r">Difference on paid bills</th><th class="r">Card spending</th><th>Closed</th></tr></thead><tbody>
-      ${trendMonths().map(h => `<tr><td>${esc(h.Label)}</td><td class="r money">${money(h["Income planned"])}</td><td class="r money">${money(h["Paid out (cash)"])}</td><td class="r money">${money(h["Bills budget"])}</td><td class="r money">${money(h["Bills paid"])}</td><td class="r money">${h["Variance on paid bills"] ? money(h["Variance on paid bills"]) : "—"}</td><td class="r money">${money(h["Card spending"])}</td><td>${esc(h.Closed)}</td></tr>`).join("")}
+    <div class="table-wrap"><table class="data" style="margin-top:12px"><thead><tr><th>Month</th><th class="r">Income</th><th class="r">Paid out (cash)</th><th class="r">Bills budget</th><th class="r">Bills paid</th><th class="r">Difference on paid bills</th><th class="r">Card spending</th><th class="r" title="PNC money spent between Fridays that isn't a recorded bill — shown on its own, not part of the bill totals">Mid-week spend</th><th>Closed</th></tr></thead><tbody>
+      ${trendMonths().map(h => `<tr><td>${esc(h.Label)}</td><td class="r money">${money(h["Income planned"])}</td><td class="r money">${money(h["Paid out (cash)"])}</td><td class="r money">${money(h["Bills budget"])}</td><td class="r money">${money(h["Bills paid"])}</td><td class="r money">${h["Variance on paid bills"] ? money(h["Variance on paid bills"]) : "—"}</td><td class="r money">${money(h["Card spending"])}</td><td class="r money">${isVal(h["Mid-week spend"]) ? money(h["Mid-week spend"]) : "—"}</td><td>${esc(h.Closed)}</td></tr>`).join("")}
     </tbody></table></div>
   </section>`;
 }
@@ -430,7 +435,7 @@ function viewDetails() {
     ${DB.tblExportCardPlan.filter(c => c.RowID).map(c => `<tr><td>${c.Block}</td><td class="mono-s">${esc(c.RowID)}</td><td class="r money">${money(c["Extra placed"])}</td><td>${esc(c["Pay-from text"])}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No card extras in the plan.</td></tr>`}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Data connection</h2></div>
-    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Writes only tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog / tblCashLog rows matched by date (a correction replaces that Friday's row); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
+    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Built for Gielarowski Financial Model (v2).xlsx. Writes only tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
 }
 
 document.addEventListener("click", async e => {

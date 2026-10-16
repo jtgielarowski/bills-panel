@@ -4,6 +4,7 @@
    The workbook is the engine. This code only reads the export/contract tables,
    shows them, and writes the few input columns listed below. No numbers live
    in this file; everything comes from the open workbook.
+   Built for: Gielarowski Financial Model (v2).xlsx (the add-in reads whichever workbook is open).
 
    READS : tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory,
            tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog,
@@ -18,6 +19,9 @@
           = { table, match:{col:value}, values, upsert } → update the matching row (or add it)
           = { table, append: [rows] }                  → add rows (fills the first blank row, else adds one)
 
+   RULES: never writes a calculated column; a new log row is added empty (Excel fills the
+   calculated columns itself) and only its input cells are written. Blank rows are skipped on read.
+
    LOCKING: after a save, the written input cells are locked (protection.locked = true)
    so typing over them in Excel needs Review ▸ Unprotect Sheet. A register row is
    locked while it has a Paid date and reopened when the payment is cleared.
@@ -28,6 +32,12 @@ const TABLES = ["tblExportMeta", "tblExportPlan", "tblExportCardPlan", "tblExpor
   "tblRegister", "tblDebts", "tblCardLog", "tblCashLog", "tblOther", "tblPaychecks", "tblMonths", "tblDadHistory", "tblDadSchedule"];
 const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month", tblDebts: "DebtID" };
 const LOG_TABLES = ["tblCardLog", "tblCashLog", "tblOther"];
+/* A row counts as blank (and is skipped on read) when all of these columns are empty. Other tables: when every cell is empty. */
+const KEY_COLS = { tblRegister: ["RowID"], tblDebts: ["DebtID"], tblMonths: ["Month"], tblPaychecks: ["Person"],
+  tblCardLog: ["Date", "Card or loan", "Balance"], tblCashLog: ["Date", "PNC balance"], tblOther: ["Date", "Description", "Amount"],
+  tblBudgetChanges: ["BillID"] };
+const blankCell = v => v === null || v === undefined || v === "";
+const isBlankRow = (table, row) => (KEY_COLS[table] || Object.keys(row)).every(k => blankCell(row[k]));
 /* Columns the dashboard is allowed to write. Anything else is refused, so a bug here can never overwrite a formula. */
 const WRITABLE = {
   tblRegister: ["Paid date", "Paid amount", "Extra paid date", "Extra paid amount", "Reason if different", "Notes", "Statement amount"],
@@ -57,7 +67,7 @@ const ExcelSource = {
       await ctx.sync();
       for (const n of TABLES) {
         const [hdr, ...rows] = ranges[n].values, fmts = ranges[n].numberFormat;
-        out[n] = rows.map((r, i) => Object.fromEntries(hdr.map((h, j) => [h, fromCell(r[j], fmts[i + 1][j])])));
+        out[n] = rows.map((r, i) => Object.fromEntries(hdr.map((h, j) => [h, fromCell(r[j], fmts[i + 1][j])]))).filter(row => !isBlankRow(n, row));
       }
       return out;
     });
@@ -79,7 +89,7 @@ const ExcelSource = {
     return Excel.run(async ctx => {
       const t = ctx.workbook.tables.getItem(change.table);
       const hdrR = t.getHeaderRowRange(), body = t.getDataBodyRange();
-      hdrR.load("values"); body.load("values, formulas, numberFormat, rowCount"); await ctx.sync();
+      hdrR.load("values"); body.load("values, numberFormat, rowCount"); await ctx.sync();
       const cols = hdrR.values[0], ci = c => cols.indexOf(c);
       const cellText = (i, c) => String(fromCell(body.values[i][ci(c)], (body.numberFormat[i] || [])[ci(c)]) ?? "");
       const findRow = crit => body.values.findIndex((_, i) => Object.entries(crit).every(([k, v]) => cellText(i, k) === String(v ?? "")));
@@ -93,11 +103,13 @@ const ExcelSource = {
             body.values[blank] = body.values[blank].map((x, j) => (cols[j] in r ? toCell(r[cols[j]]) : x));
             if (isLog) lockRow(body.getRow(blank), true);
           } else {
-            // Copy the calculated-column formulas from the last row so they keep working on the new row.
-            const last = body.formulas[body.rowCount - 1] || [];
-            t.rows.add(null, [cols.map((c, j) => (c in r) ? toCell(r[c]) : (typeof last[j] === "string" && last[j].startsWith("=") ? last[j] : ""))]);
+            // Add an EMPTY row (Excel extends the calculated columns by itself), then write only the input cells.
+            // Calculated columns are never written, not even with copied formulas.
+            t.rows.add(null);
             await ctx.sync();
-            if (isLog) lockRow(t.getDataBodyRange().getLastRow(), true);
+            const last = t.getDataBodyRange().getLastRow();
+            for (const [k, v] of Object.entries(r)) last.getCell(0, ci(k)).values = [[toCell(v)]];
+            if (isLog) lockRow(last, true);
           }
           await ctx.sync();
         };
@@ -198,9 +210,44 @@ function localRecalc(r) {
   if (r.Remaining === 0) { r["Payday amount"] = 0; r["Planned date"] = r["Planned date"]; }
   r["Pay from"] = r.Remaining === 0 && paid > 0 ? "Paid " + fmtD(r["Paid date"], { weekday: "short", month: "numeric", day: "numeric" }) : r["Pay from"];
   r["Cash month"] = r["Paid date"] ? monthKey(r["Paid date"]) : r["Cash month"];
+  if (r["Paid date"]) { r.Autopaid = false; r["Eff paid date"] = r["Paid date"]; r["Eff paid amount"] = +r["Paid amount"] || 0; }
+  r.Status = r.Remaining === 0 && paid > 0 ? "Paid ✓" : null;      // null = let status() work it out
   r.Variance = r.Source === "Bill" && paid > 0 ? Math.round((paid - r.Budget) * 100) / 100 : null;
-  r["Needs reason"] = r.Variance !== null && Math.abs(r.Variance) > META.varianceAmount && Math.abs(r.Variance) > META.variancePct * r.Budget && !r["Reason if different"];
+  r["Over threshold"] = r.Variance !== null && varianceCheck(paid, r.Budget).state === "over";
+  r["Needs reason"] = r["Over threshold"] && !r["Reason if different"];
 }
+
+/* =========================================================================
+   Variance rule (% only). A bill payment needs a reason when
+     |paid − budget| > variancePct × budget        (a $0 budget: any non-zero amount)
+   variancePct always comes from tblExportMeta (Setup ▸ variance %). There is no $ threshold any more.
+   ========================================================================= */
+function varianceCheck(amount, budget, pct = +META.variancePct) {
+  if (blankCell(amount) || isNaN(+amount)) return { state: "blank" };
+  const b = +budget || 0, diff = Math.round((+amount - b) * 100) / 100;
+  const over = b === 0 ? Math.abs(diff) >= 0.005 : Math.abs(diff) - pct * b > 1e-9;
+  return { state: over ? "over" : "within", diff, pct: b ? Math.abs(diff) / b : null, dir: diff > 0 ? "over" : "under" };
+}
+const pctText = p => `${+(p * 100).toFixed(1)}%`;                       // 0.1 → "10%", 0.125 → "12.5%"
+/* Whole % like the workbook; one decimal when rounding would make an over-threshold amount look like it's at the threshold. */
+const varPctText = (p, thr) => Math.round(p * 100) > +(thr * 100).toFixed(1) ? `${Math.round(p * 100)}%` : pctText(p);
+function varianceMessage(v, budget, pct = +META.variancePct) {
+  const b = money(+budget || 0), t = pctText(pct);
+  if (v.state === "blank") return `Budget for this bill: ${b}. If you pay more than ${t} above or below it, pick a reason.`;
+  if (v.state === "within") return `Within ${t} of budget (${b})`;
+  if (v.pct === null) return `${v.dir === "over" ? "Over" : "Under"} the ${b} budget. Pick a reason.`;
+  return `${varPctText(v.pct, pct)} ${v.dir} the ${b} budget (more than ${t}). Pick a reason.`;
+}
+
+/* =========================================================================
+   Paid or not — from the workbook's Status / Autopaid / Eff paid columns, never from Paid date alone.
+   An autopay bill counts as paid once its due date passes (Autopaid = TRUE, Status "Paid ✓", Paid date blank).
+   ========================================================================= */
+const isAutopaid = r => r.Autopaid === true;
+const isPaid = r => !!r.Applies && (isVal(r.Status) ? String(r.Status).startsWith("Paid") : (isAutopaid(r) || (r.Remaining <= 0 && (+r["Paid total"] || 0) > 0)));
+const effDate = r => ("Eff paid date" in r) ? r["Eff paid date"] : r["Paid date"];
+const effAmt = r => ("Eff paid date" in r) ? (isVal(r["Eff paid date"]) ? +r["Eff paid amount"] || 0 : 0) : (+r["Paid amount"] || 0);
+const autoTag = r => isAutopaid(r) ? `<span class="tag auto" title="Autopay: counted as paid on the due date. Use Record payment to enter the real amount.">Autopaid</span>` : "";
 
 /* ========================================================================= derived data */
 const reg = () => DB.tblRegister;
@@ -208,7 +255,8 @@ function status(r) {
   if (!r.Applies) return { t: "Not needed", c: "muted" };
   const flag = r.Source === "Debt" ? (debtsById[r.ItemID] || {}).Flag : "";
   if (r.Source === "Debt" && !r["Paid date"] && flag === "Needs Friday balance") return { t: "Enter balance", c: "info" };
-  if (r.Remaining <= 0) return r["Paid total"] > 0 ? { t: "Paid", c: "paid" } : { t: "—", c: "muted" };
+  if (isPaid(r)) return { t: "Paid", c: "paid" };
+  if (r.Remaining <= 0) return { t: "—", c: "muted" };
   if (r["Paid total"] > 0) return { t: "Part paid", c: "part" };
   const d = r["Days out"];
   if (d < 0) return { t: `Late · ${-d} day${d === -1 ? "" : "s"}`, c: "late" };
@@ -222,14 +270,16 @@ function inView(r, vm) {
   if (!r.Applies) return false;
   if (r.Month === vm) return true;
   if (r.Month === addMonths(vm, -1)) {
-    if (!r["Paid date"]) return r.Remaining > 0 && (!r["Planned date"] || r["Planned date"] >= vm);
-    return r["Paid date"] >= vm;
+    const ep = effDate(r);
+    if (!ep) return r.Remaining > 0 && (!r["Planned date"] || r["Planned date"] >= vm);
+    return ep >= vm;
   }
   return false;
 }
 const viewRows = vm => reg().filter(r => inView(r, vm));
 const groupOf = (r, vm) => r.Month < vm ? "Last month's bills" : r.Category;
-const paidInRange = (a, b) => sum(reg(), r => ((r["Paid date"] && r["Paid date"] >= a && r["Paid date"] <= b) ? +r["Paid amount"] || 0 : 0) + ((r["Extra paid date"] && r["Extra paid date"] >= a && r["Extra paid date"] <= b) ? +r["Extra paid amount"] || 0 : 0));
+/* Money paid out between two dates — Eff paid date / Eff paid amount (includes autopaid bills, like the Export totals) + extra payments. */
+const paidInRange = (a, b) => sum(reg(), r => { const d = effDate(r); return ((d && d >= a && d <= b) ? effAmt(r) : 0) + ((r["Extra paid date"] && r["Extra paid date"] >= a && r["Extra paid date"] <= b) ? +r["Extra paid amount"] || 0 : 0); });
 const otherSpent = (a, b) => sum(DB.tblOther, o => o.Status === "Spent" && o.Date >= a && o.Date <= b ? o.Amount : 0);
 const planOut = p => Math.max(0, (+p["Total out"] || 0) - (adjust[p.Payday] || 0));
 const paydaysIn = vm => paydays.filter(p => monthKey(p.date) === vm);
@@ -248,7 +298,7 @@ function kpis(vm) {
   const ahead = plan.filter(p => p.Payday >= META.currentPayday);
   const low = ahead.reduce((m, p) => (m === null || p["Cash after"] < m["Cash after"]) ? p : m, null);
   const rows = viewRows(vm);
-  const paidN = rows.filter(r => r.Remaining <= 0 && r["Paid total"] > 0).length;
+  const paidN = rows.filter(isPaid).length;
   const late = rows.filter(r => r.Remaining > 0 && r["Days out"] < 0 && status(r).c !== "info").length;
   const soon = rows.filter(r => r.Remaining > 0 && r["Days out"] >= 0 && r["Days out"] <= META.soonOrangeDays && status(r).c !== "info").length;
   return { comingIn, received, paidSoFar, goingOut, left: last ? last["Cash after"] : null, paidN, total: rows.length, late, soon, low };
@@ -378,6 +428,16 @@ function fridayBanner(i) {
   if (i.state === "open") return `<div class="lockbar open"><span><b>${d}:</b> type each balance, then Save. Entries lock once saved.</span></div>`;
   if (i.state === "missed") return `<div class="lockbar muted"><span>Nothing was saved for ${d}.</span></div>`;
   return `<div class="lockbar muted"><span>${d} hasn't come yet.</span></div>`;
+}
+/* Mid-week spend card, read from that Friday's tblCashLog row (all numbers come from the workbook). */
+const PNC_LABEL = "PNC available balance — including today's paychecks, before paying today's bills.";
+function midweekCard(c) {
+  if (!c || !isVal(c["PNC balance"])) return "";
+  if (!isVal(c["Previous date"])) return `<div class="mw-card first">Starting balance — mid-week spend starts next Friday.</div>`;
+  const mw = +c["Mid-week spend"] || 0;
+  const note = mw > 0.005 ? `<div class="mw-note amber">spent ${money(mw)} more than recorded</div>`
+    : mw < -0.005 ? `<div class="mw-note green">${money(-mw)} more cash than expected</div>` : "";
+  return `<div class="mw-card"><div class="mw-line">Expected: <b class="money">${money(c["Expected balance"])}</b> · You entered: <b class="money">${money(c["PNC balance"])}</b> · Mid-week spend: <b class="money">${money(mw)}</b></div>${note}</div>`;
 }
 /* One value cell: a locked value, an input, or a dash. */
 function fridayField(i, name, label, saved, placeholder = "") {
@@ -535,21 +595,25 @@ function payGuide(r) {
   return `<div class="guide"><h4>Payment guide</h4><div class="gl">${rows}</div></div>`;
 }
 function payForm(r) {
-  const hasFirst = !!r["Paid date"], t = typeOf(r), min = minOf(r), pd = +r["Payday amount"] || 0;
-  const amt = hasFirst ? r["Paid amount"] : Math.round((r.Source === "Debt" ? (pd >= min - 0.005 && pd > 0 ? pd : sugOf(r) || min) : (pd || +r.Remaining || r.Amount)) * 100) / 100;
-  const chk = payCheck(r, (+amt || 0) + (+r["Extra paid amount"] || 0) * (hasFirst ? 1 : 0)), id = esc(r.RowID);
+  const hasFirst = !!r["Paid date"], auto = isAutopaid(r), t = typeOf(r), min = minOf(r), pd = +r["Payday amount"] || 0;
+  // An autopaid bill opens with the automatic amount and date; saving records the real payment, which replaces them.
+  const amt = hasFirst ? r["Paid amount"] : auto ? +r["Eff paid amount"] || r.Amount : Math.round((r.Source === "Debt" ? (pd >= min - 0.005 && pd > 0 ? pd : sugOf(r) || min) : (pd || +r.Remaining || r.Amount)) * 100) / 100;
+  const total0 = (+amt || 0) + (+r["Extra paid amount"] || 0) * (hasFirst ? 1 : 0);
+  const chk = payCheck(r, total0), id = esc(r.RowID);
+  const isBill = r.Source === "Bill", v = isBill ? varianceCheck(blankCell(amt) ? null : total0, r.Budget) : null, over = !!v && v.state === "over";
   return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}
   <div class="payarea">${payGuide(r)}
   <form class="payform" data-form="pay" data-id="${id}">
     ${t === "Variable" ? `<label class="field">Bill amount from statement<input type="number" step="0.01" min="0" id="pf-stmt-${id}" name="statement" value="${r["Statement amount"] ?? ""}" placeholder="when it arrives"></label>` : ""}
-    <label class="field">Date paid<input type="date" id="pf-date-${id}" name="date" value="${hasFirst ? r["Paid date"] : META.asOf}" required></label>
+    ${auto && !hasFirst ? `<p class="lockbar open" style="margin:0;width:100%"><span><b>Autopaid</b> on ${shortD(effDate(r))} for ${money(effAmt(r))} (the budget). Enter the real amount if it was different.</span></p>` : ""}
+    <label class="field">Date paid<input type="date" id="pf-date-${id}" name="date" value="${hasFirst ? r["Paid date"] : auto ? effDate(r) : META.asOf}" required></label>
     <label class="field">Amount paid<input type="number" step="0.01" min="0" id="pf-amt-${id}" name="amount" value="${amt}" required class="${chk.block ? "bad" : ""}"></label>
-    ${r.Source === "Bill" ? `<label class="field">Reason if different<select id="pf-reason-${id}" name="reason"><option value="">—</option>${REASONS.map(x => `<option ${r["Reason if different"] === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>` : ""}
-    <label class="field note">Note<input type="text" id="pf-note-${id}" name="note" value="${esc(r.Notes || "")}" placeholder="optional"></label>
+    ${isBill ? `<label class="field why-field" ${over ? "" : "hidden"}>Reason if different<select id="pf-reason-${id}" name="reason"><option value="">—</option>${REASONS.map(x => `<option ${over && r["Reason if different"] === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>` : ""}
+    <label class="field note ${isBill ? "why-field" : ""}" ${isBill && !over ? "hidden" : ""}>Note<input type="text" id="pf-note-${id}" name="note" value="${esc(!isBill || over ? r.Notes || "" : "")}" placeholder="optional"></label>
     ${hasFirst ? `<label class="field">Extra payment<input type="number" step="0.01" min="0" id="pf-extra-${id}" name="extra" value="${r["Extra paid amount"] || ""}" placeholder="0.00"></label>` : ""}
     <div class="pf-check" id="pf-check-${id}">${chk.html}</div>
     <div class="form-actions"><button class="btn primary" type="submit" ${chk.block ? "disabled" : ""}>Save</button><button class="btn" type="button" data-act="close-row">Cancel</button>${t === "Variable" && !hasFirst ? `<button class="btn ghost" type="button" data-act="save-statement" data-id="${id}">Save statement only</button>` : ""}${hasFirst ? `<button class="btn ghost" type="button" data-act="clear-row" data-id="${id}">Clear payment</button>` : ""}</div>
-    ${r.Source === "Bill" ? `<p class="form-msg" id="pf-msg-${id}">Budget for this bill: ${money(r.Budget)}. If you pay a different amount by more than ${money(META.varianceAmount, 0)} and ${Math.round(META.variancePct * 100)}%, pick a reason.</p>` : ""}
+    ${isBill ? `<p class="form-msg ${v.state}" id="pf-msg-${id}" aria-live="polite">${esc(varianceMessage(v, r.Budget))}</p>` : ""}
   </form></div>`;
 }
 /* Live check while typing; the "Use" buttons fill the amount. */
@@ -561,7 +625,21 @@ function recheckPay(f) {
   f.querySelector('[name="amount"]').classList.toggle("bad", chk.block);
   f.querySelector('button[type="submit"]').disabled = chk.block;
   f.closest(".payarea").querySelectorAll(".fill").forEach(b => b.classList.toggle("on", Math.abs(+b.dataset.v - total) < 0.005));
+  varianceUi(f, row);
   return chk;
+}
+/* Bills: re-check the % rule every time the amount changes. Over → show Reason + Note (amber);
+   within → hide AND clear them so blanks are saved (green); empty box → neutral text. */
+function varianceUi(f, row) {
+  if (row.Source !== "Bill") return null;
+  const raw = f.querySelector('[name="amount"]').value, extra = +(f.querySelector('[name="extra"]') || {}).value || 0;
+  const v = varianceCheck(raw === "" ? null : +raw + extra, row.Budget);
+  const m = f.querySelector(".form-msg"); m.className = `form-msg ${v.state}`; m.textContent = varianceMessage(v, row.Budget); m.style.fontWeight = "";
+  f.querySelectorAll(".why-field").forEach(el => {
+    el.hidden = v.state !== "over";
+    if (v.state === "within") el.querySelectorAll("select, input").forEach(x => x.value = "");
+  });
+  return v;
 }
 document.addEventListener("input", e => { const f = e.target.closest('form[data-form="pay"]'); if (f && (e.target.name === "amount" || e.target.name === "extra")) recheckPay(f); });
 document.addEventListener("click", e => {
@@ -573,12 +651,13 @@ document.addEventListener("click", e => {
 async function submitPay(f) {
   const row = reg().find(r => r.RowID === f.dataset.id), fd = new FormData(f);
   const amount = +fd.get("amount"), extra = fd.get("extra") ? +fd.get("extra") : null, reason = fd.get("reason") || null;
-  const total = amount + (extra || 0), diff = total - row.Budget;
+  const total = amount + (extra || 0);
   if (recheckPay(f).block) return;
-  const needs = row.Source === "Bill" && Math.abs(diff) > META.varianceAmount && Math.abs(diff) > META.variancePct * row.Budget;
-  if (needs && !reason) { const m = $(`#pf-msg-${CSS.escape(row.RowID)}`); m.textContent = `That's ${money(Math.abs(diff))} ${diff > 0 ? "over" : "under"} the budget. Pick a reason from the list, then save.`; m.style.fontWeight = "600"; return; }
-  const values = { "Paid date": fd.get("date"), "Paid amount": amount, "Notes": fd.get("note") || null };
-  if (row.Source === "Bill") values["Reason if different"] = reason;
+  const v = row.Source === "Bill" ? varianceCheck(total, row.Budget) : null, over = !!v && v.state === "over";
+  if (over && !reason) { const m = $(`#pf-msg-${CSS.escape(row.RowID)}`); m.className = "form-msg over"; m.textContent = varianceMessage(v, row.Budget); m.style.fontWeight = "600"; const s = f.querySelector('[name="reason"]'); if (s) s.focus(); return; }
+  // Bills within the threshold save Reason and Note as blanks.
+  const values = { "Paid date": fd.get("date"), "Paid amount": amount, "Notes": (v && !over) ? null : (fd.get("note") || null) };
+  if (row.Source === "Bill") values["Reason if different"] = over ? reason : null;
   if (f.querySelector('[name="statement"]')) { const st = fd.get("statement"); values["Statement amount"] = isVal(st) ? +st : null; }
   if (f.querySelector('[name="extra"]')) { values["Extra paid amount"] = extra; values["Extra paid date"] = extra ? fd.get("date") : null; }
   state.openRow = null;

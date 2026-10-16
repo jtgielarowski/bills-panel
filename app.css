@@ -108,8 +108,8 @@ main { max-width: 1440px; margin: 0 auto; padding: 18px 24px 64px; display: flex
 .complete { background: var(--good-bg); color: var(--good-ink); border-radius: 10px; padding: 10px 14px; font-weight: 600; }
 
 /* KPIs */
-.kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .kpi { padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
 .kpi-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
@@ -200,7 +200,18 @@ tr.formrow td { background: var(--surface-2); }
 .field input, .field select { background: var(--input); border: 1.5px solid var(--input-line); border-radius: 8px; padding: 7px 10px; min-height: 38px; font-weight: 500; color: var(--ink); }
 .field input[type="number"] { width: 130px; font-family: var(--mono); }
 .field.note input { width: 240px; }
-.form-msg { font-size: 12.5px; color: var(--warn-ink); width: 100%; }
+.form-msg { font-size: 12.5px; color: var(--ink-2); width: 100%; }
+.form-msg.over { color: var(--st-soon-ink); font-weight: 600; }   /* amber: over the % threshold — pick a reason */
+.form-msg.within { color: #2e7d4f; }                                /* green: within the % threshold */
+.field[hidden] { display: none !important; }
+/* Autopaid tag (autopay bill counted as paid on its due date) */
+.tag.auto { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: var(--info-bg); color: var(--info-ink); vertical-align: middle; white-space: nowrap; }
+/* Mid-week spend card (Friday update, from that Friday's tblCashLog row) */
+.mw-card { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-soft); font-size: 12.5px; font-weight: 400; color: var(--ink-2); }
+.mw-card .money { color: var(--ink); }
+.mw-note { margin-top: 3px; font-weight: 600; }
+.mw-note.amber { color: var(--st-soon-ink); }
+.mw-note.green { color: #2e7d4f; }
 .form-actions { display: flex; gap: 8px; }
 
 .twocol { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
