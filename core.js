@@ -4,12 +4,13 @@
    The workbook is the engine. This code only reads the export/contract tables,
    shows them, and writes the few input columns listed below. No numbers live
    in this file; everything comes from the open workbook.
-   Built for: Gielarowski Financial Model (v2).xlsx (the add-in reads whichever workbook is open).
+   Built for: Gielarowski Financial Model (v3).xlsx; also works with v2 (the add-in reads whichever workbook is open).
 
    READS : tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory,
            tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog,
            tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule
-   WRITES: tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog /
+   WRITES: tblRegister payment input columns (matched by RowID); tblRegister[Statement amount] alone
+           through "Set amount" (unpaid Variable bills; never touches Paid date/amount, never locks); tblCardLog /
            tblCashLog rows matched by Date (+ card) — a correction REPLACES that Friday's row,
            never adds a second one; tblPaychecks[Actual amount] (Person + Deposit date);
            tblDebts[BT payment mode, Fixed monthly payment] (DebtID); tblOther new rows;
@@ -182,7 +183,7 @@ const GROUP_ORDER = ["Last month's bills", "Housing", "Utilities", "Auto", "Insu
 const REASONS = ["Seasonal / usage", "Price or rate change", "One-time charge", "Paid early (timing)", "Paid late (timing)", "Extra debt payment", "Budget estimate off", "Other — see note"];
 
 let DB, META, debtsById, plan, paydays, adjust = {}, undoStack = [];
-const state = { view: "month", vm: null, openRow: null, cat: null, detailed: false, fri: { date: null, unlocked: false } };
+const state = { view: "month", vm: null, openRow: null, amtRow: null, cat: null, detailed: false, fri: { date: null, unlocked: false } };
 
 function index() {
   META = Object.fromEntries(DB.tblExportMeta.map(r => [r.Key, r.Value]));
@@ -199,13 +200,23 @@ function index() {
   if (!state.vm) state.vm = META.viewMonth || monthKey(META.asOf);
 }
 
-/* After a payment is recorded in preview mode, update the row the way Excel would. */
+/* After a payment or a known amount is recorded in preview mode, update the row the way Excel would. */
 function localRecalc(r) {
   const paid = (+r["Paid amount"] || 0) + (+r["Extra paid amount"] || 0);
   const before = (+r["Remaining must"] || 0) + (+r["Extra planned"] || 0);
+  if (r.Source === "Bill" && typeOf(r) === "Variable") {        // Amount = known amount (Variable bills), else Budget
+    r["Amount known?"] = isVal(r["Statement amount"]) && !isNaN(+r["Statement amount"]);
+    r.Amount = r["Amount known?"] ? +r["Statement amount"] : +r.Budget || 0;
+    r.Suggested = r.Minimum = r["Must pay"] = r.Amount;
+    r["Suggested basis"] = r["Amount known?"] ? "statement" : "budget estimate";
+  }
   r["Paid total"] = paid;
   r.Remaining = r["Paid date"] ? 0 : Math.max(0, Math.round((r.Amount - paid) * 100) / 100);   // a recorded payment settles the row
   r["Remaining must"] = Math.min(r.Remaining, Math.max(0, (r["Must pay"] || 0) - paid));
+  if (r.Source === "Bill" && r["Planned date"] && r.Remaining > 0) {   // a known amount changes what the payday pays
+    r["Remaining must"] = r.Remaining; if (r["Payday amount"] > 0) r["Payday amount"] = r.Remaining;
+    adjust[r["Planned date"]] = (adjust[r["Planned date"]] || 0) + before - r.Remaining;
+  }
   if (r["Planned date"] && r.Remaining === 0) adjust[r["Planned date"]] = (adjust[r["Planned date"]] || 0) + before;
   if (r.Remaining === 0) { r["Payday amount"] = 0; r["Planned date"] = r["Planned date"]; }
   r["Pay from"] = r.Remaining === 0 && paid > 0 ? "Paid " + fmtD(r["Paid date"], { weekday: "short", month: "numeric", day: "numeric" }) : r["Pay from"];
@@ -573,8 +584,71 @@ const basisOf = r => r["Suggested basis"] || "";
 const blocksBelowMin = r => r.Source === "Debt";
 /* Variance on a paid bill (paid − budget), e.g. "−$0.30 vs budget"; empty when none. */
 const varText = r => (r.Source === "Bill" && r.Variance !== null && r.Variance !== undefined && r.Variance !== "" && Math.abs(+r.Variance) >= 0.005) ? `${+r.Variance > 0 ? "+" : "−"}${money(Math.abs(+r.Variance)).replace("−", "")} vs budget` : "";
+/* =========================================================================
+   Known amount ("Set amount") — Variable bills only.
+   A known amount is the bill's real amount, entered BEFORE paying (from the statement). It writes only
+   tblRegister[Statement amount] by RowID: no Paid date, no Paid amount, no lock. The workbook then uses it
+   for Amount, Remaining, the plan and cash after each payday; clearing it goes back to the budget.
+   "Known" comes from tblRegister[Amount known?] (v3); on an older workbook it falls back to
+   Variable bill + Statement amount entered. The difference vs budget uses the same % rule as payments.
+   ========================================================================= */
+const isVarBill = r => r.Source === "Bill" && typeOf(r) === "Variable";
+const isKnown = r => ("Amount known?" in r) ? r["Amount known?"] === true : (isVarBill(r) && isVal(r["Statement amount"]) && !isNaN(+r["Statement amount"]));
+const knownAmt = r => isKnown(r) ? +r["Statement amount"] : null;
+/* Set amount is offered on unpaid Variable bills (not yet paid, not autopaid). */
+const canSetAmount = r => !!r.Applies && isVarBill(r) && !r["Paid date"] && !isAutopaid(r) && !isPaid(r);
+const knownVsBudget = r => varianceCheck(knownAmt(r), r.Budget);
+/* Badge for an unpaid Variable bill: "Known" (solid) or "Estimate" (dashed). Paid and other rows: none. */
+function amountBadge(r) {
+  if (!isVarBill(r) || isPaid(r)) return "";
+  return isKnown(r) ? `<span class="tag known" title="The amount on the bill is entered (Set amount). The plan uses it.">Known</span>`
+    : `<span class="tag est" title="No bill amount yet — the plan uses the budget. Use Set amount when the statement arrives.">Estimate</span>`;
+}
+/* Shown under the amount when the known amount is more than variancePct away from the budget. */
+function knownDiff(r) {
+  if (!isVarBill(r) || isPaid(r) || !isKnown(r)) return "";
+  const v = knownVsBudget(r);
+  if (v.state !== "over") return "";
+  const pct = v.pct === null ? "" : ` (${varPctText(v.pct, +META.variancePct)})`;
+  return `<span class="kn-diff"><span>budget ${money(r.Budget)}</span> · <span>${v.diff > 0 ? "+" : "−"}${money(Math.abs(v.diff))}${pct}</span></span>`;
+}
+/* Button that opens the Set amount form. */
+const amountBtn = (r, cls = "btn small ghost") => canSetAmount(r) ? `<button type="button" class="${cls}" data-act="open-amount" data-id="${esc(r.RowID)}">${isKnown(r) ? "Change amount" : "Set amount"}</button>` : "";
+function knownMsg(raw, budget) {
+  const v = varianceCheck(raw === "" ? null : +raw, budget);
+  if (v.state === "blank") return { cls: "blank", text: `Leave blank to use the ${money(+budget || 0)} budget.` };
+  if (v.state === "within") return { cls: "within", text: `Within ${pctText(+META.variancePct)} of the ${money(+budget || 0)} budget.` };
+  return { cls: "over", text: `${v.pct === null ? "" : varPctText(v.pct, +META.variancePct) + " "}${v.dir} the ${money(+budget || 0)} budget. The plan will use the known amount; you'll pick a reason when you record the payment.` };
+}
+function amountForm(r) {
+  const id = esc(r.RowID), has = isKnown(r), cur = has ? knownAmt(r) : "", m = knownMsg(cur === "" ? "" : String(cur), r.Budget);
+  return `<form class="payform amtform" data-form="amount" data-id="${id}">
+    <p class="lockbar open" style="margin:0;width:100%"><span><b>Set the amount on the bill.</b> This doesn't record a payment — the plan and cash after each payday use it right away.</span></p>
+    <label class="field">Amount on the bill<input type="number" step="0.01" min="0" id="af-amt-${id}" name="known" value="${cur}" placeholder="from the statement"></label>
+    <div class="form-actions"><button class="btn primary" type="submit">Save amount</button><button class="btn" type="button" data-act="close-amount">Cancel</button>${has ? `<button class="btn ghost" type="button" data-act="clear-amount" data-id="${id}">Clear (use budget)</button>` : ""}</div>
+    <p class="form-msg ${m.cls}" id="af-msg-${id}" aria-live="polite">${esc(m.text)}</p>
+  </form>`;
+}
+document.addEventListener("input", e => {
+  const f = e.target.closest('form[data-form="amount"]'); if (!f || e.target.name !== "known") return;
+  const row = reg().find(r => r.RowID === f.dataset.id); if (!row) return;
+  const m = knownMsg(e.target.value, row.Budget), el = f.querySelector(".form-msg");
+  el.className = `form-msg ${m.cls}`; el.textContent = m.text;
+});
+async function saveAmount(id, raw) {
+  const row = reg().find(r => r.RowID === id);
+  if (!row || !canSetAmount(row)) { toast("Set amount is only for unpaid Variable bills."); return; }
+  if (isVal(raw) && (isNaN(+raw) || +raw < 0)) { const m = document.getElementById(`af-msg-${id}`); if (m) { m.className = "form-msg over"; m.textContent = "Type the amount on the bill, like 158.20 (no minus sign)."; } return; }
+  const v = isVal(raw) ? Math.round(+raw * 100) / 100 : null;
+  state.amtRow = null;
+  await writeRow(row, { "Statement amount": v }, v === null ? `Cleared the known amount for ${esc(row.Bill)} — the plan uses the ${money(row.Budget)} budget again.`
+    : `Set ${esc(row.Bill)} to ${money(v)}. The plan uses it now — nothing is marked paid.`);
+}
+const submitAmount = f => saveAmount(f.dataset.id, new FormData(f).get("known"));
+const clearAmount = id => saveAmount(id, null);
+
 /* Mark paid is a one-tap shortcut only when the payday amount is safe to record as-is. */
-const quickPayOk = r => !(blocksBelowMin(r) && (+r["Payday amount"] || 0) < minOf(r) - 0.005) && !(typeOf(r) === "Variable" && !isVal(r["Statement amount"]));
+const quickPayOk = r => !(blocksBelowMin(r) && (+r["Payday amount"] || 0) < minOf(r) - 0.005) && !(isVarBill(r) && !isKnown(r));
 function payCheck(r, total) {
   const min = minOf(r), sug = sugOf(r), cents = x => Math.round(x * 100) / 100;
   if (blocksBelowMin(r) && total < min - 0.005)
@@ -591,20 +665,23 @@ function payGuide(r) {
     rows = line("Minimum due", minOf(r)) + line("Suggested", sugOf(r), esc(basisOf(r)) + (d["BT payment mode"] ? ` · ${esc(btPlanText(d))}` : ""), true);
     if (isVal(d["Latest balance"])) rows += line(`Full balance (${shortD(d["Latest log date"])})`, +d["Latest balance"]);
   } else if (r.Source === "Debt") rows = line("Monthly payment", sugOf(r), "fixed", true);
-  else rows = line(t === "Variable" ? (isVal(r["Statement amount"]) ? "Bill amount (statement)" : "Budget estimate") : "Bill amount", sugOf(r) || r.Amount, t === "Variable" && !isVal(r["Statement amount"]) ? "Type the real amount from the statement below when it arrives." : "", true);
+  else if (isVarBill(r) && isKnown(r)) rows = line("Known amount (statement)", knownAmt(r), "", true) + line("Budget", +r.Budget || 0, knownVsBudget(r).state === "over" ? esc(varianceMessage(knownVsBudget(r), r.Budget).replace(" Pick a reason.", " — you'll pick a reason.")) : "");
+  else rows = line(t === "Variable" ? "Budget estimate" : "Bill amount", sugOf(r) || r.Amount, t === "Variable" && canSetAmount(r) ? "No bill amount yet. Use Set amount when the statement arrives." : "", true);
   return `<div class="guide"><h4>Payment guide</h4><div class="gl">${rows}</div></div>`;
 }
 function payForm(r) {
   const hasFirst = !!r["Paid date"], auto = isAutopaid(r), t = typeOf(r), min = minOf(r), pd = +r["Payday amount"] || 0;
   // An autopaid bill opens with the automatic amount and date; saving records the real payment, which replaces them.
-  const amt = hasFirst ? r["Paid amount"] : auto ? +r["Eff paid amount"] || r.Amount : Math.round((r.Source === "Debt" ? (pd >= min - 0.005 && pd > 0 ? pd : sugOf(r) || min) : (pd || +r.Remaining || r.Amount)) * 100) / 100;
+  // A known amount (Set amount) pre-fills the payment; it can still be changed before saving.
+  const amt = hasFirst ? r["Paid amount"] : auto ? (isKnown(r) ? knownAmt(r) : +r["Eff paid amount"] || r.Amount)
+    : isKnown(r) ? knownAmt(r) : Math.round((r.Source === "Debt" ? (pd >= min - 0.005 && pd > 0 ? pd : sugOf(r) || min) : (pd || +r.Remaining || r.Amount)) * 100) / 100;
   const total0 = (+amt || 0) + (+r["Extra paid amount"] || 0) * (hasFirst ? 1 : 0);
   const chk = payCheck(r, total0), id = esc(r.RowID);
   const isBill = r.Source === "Bill", v = isBill ? varianceCheck(blankCell(amt) ? null : total0, r.Budget) : null, over = !!v && v.state === "over";
   return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}
   <div class="payarea">${payGuide(r)}
   <form class="payform" data-form="pay" data-id="${id}">
-    ${t === "Variable" ? `<label class="field">Bill amount from statement<input type="number" step="0.01" min="0" id="pf-stmt-${id}" name="statement" value="${r["Statement amount"] ?? ""}" placeholder="when it arrives"></label>` : ""}
+    ${isVarBill(r) ? `<p class="kn-line" style="margin:0;width:100%">${isKnown(r) ? `Known amount <b class="money">${money(knownAmt(r))}</b>${amountBadge(r)}` : `No known amount yet — using the ${money(r.Budget)} budget estimate.`} ${amountBtn(r, "linkish")}</p>` : ""}
     ${auto && !hasFirst ? `<p class="lockbar open" style="margin:0;width:100%"><span><b>Autopaid</b> on ${shortD(effDate(r))} for ${money(effAmt(r))} (the budget). Enter the real amount if it was different.</span></p>` : ""}
     <label class="field">Date paid<input type="date" id="pf-date-${id}" name="date" value="${hasFirst ? r["Paid date"] : auto ? effDate(r) : META.asOf}" required></label>
     <label class="field">Amount paid<input type="number" step="0.01" min="0" id="pf-amt-${id}" name="amount" value="${amt}" required class="${chk.block ? "bad" : ""}"></label>
@@ -612,7 +689,8 @@ function payForm(r) {
     <label class="field note ${isBill ? "why-field" : ""}" ${isBill && !over ? "hidden" : ""}>Note<input type="text" id="pf-note-${id}" name="note" value="${esc(!isBill || over ? r.Notes || "" : "")}" placeholder="optional"></label>
     ${hasFirst ? `<label class="field">Extra payment<input type="number" step="0.01" min="0" id="pf-extra-${id}" name="extra" value="${r["Extra paid amount"] || ""}" placeholder="0.00"></label>` : ""}
     <div class="pf-check" id="pf-check-${id}">${chk.html}</div>
-    <div class="form-actions"><button class="btn primary" type="submit" ${chk.block ? "disabled" : ""}>Save</button><button class="btn" type="button" data-act="close-row">Cancel</button>${t === "Variable" && !hasFirst ? `<button class="btn ghost" type="button" data-act="save-statement" data-id="${id}">Save statement only</button>` : ""}${hasFirst ? `<button class="btn ghost" type="button" data-act="clear-row" data-id="${id}">Clear payment</button>` : ""}</div>
+    ${isKnown(r) ? `<div class="pf-known" id="pf-known-${id}" ${Math.abs(total0 - knownAmt(r)) < 0.005 ? "hidden" : ""}><p class="warnbox" style="margin:0">⚠ <span class="kn-text">${knownMismatchText(total0, r)}</span></p><label class="kn-upd"><input type="checkbox" name="updknown" id="pf-upd-${id}"> Also change the known amount to <span class="kn-to money">${money(total0)}</span></label></div>` : ""}
+    <div class="form-actions"><button class="btn primary" type="submit" ${chk.block ? "disabled" : ""}>Save</button><button class="btn" type="button" data-act="close-row">Cancel</button>${hasFirst ? `<button class="btn ghost" type="button" data-act="clear-row" data-id="${id}">Clear payment</button>` : ""}</div>
     ${isBill ? `<p class="form-msg ${v.state}" id="pf-msg-${id}" aria-live="polite">${esc(varianceMessage(v, r.Budget))}</p>` : ""}
   </form></div>`;
 }
@@ -626,7 +704,18 @@ function recheckPay(f) {
   f.querySelector('button[type="submit"]').disabled = chk.block;
   f.closest(".payarea").querySelectorAll(".fill").forEach(b => b.classList.toggle("on", Math.abs(+b.dataset.v - total) < 0.005));
   varianceUi(f, row);
+  knownUi(f, row, total);
   return chk;
+}
+/* Known amount vs what is being paid: a difference fails the model check, so say so and offer (opt-in) to update it. */
+const knownMismatchText = (total, r) => `${money(total)} is different from the known amount (${money(knownAmt(r))}). The model check "Every paid Variable bill matches its known amount" will flag it unless the known amount is changed too.`;
+function knownUi(f, row, total) {
+  const box = f.querySelector(".pf-known"); if (!box || !isKnown(row)) return;
+  const same = Math.abs(total - knownAmt(row)) < 0.005;
+  box.hidden = same;
+  if (same) { const c = box.querySelector('[name="updknown"]'); if (c) c.checked = false; return; }
+  box.querySelector(".kn-text").textContent = knownMismatchText(total, row);
+  box.querySelector(".kn-to").textContent = money(total);
 }
 /* Bills: re-check the % rule every time the amount changes. Over → show Reason + Note (amber);
    within → hide AND clear them so blanks are saved (green); empty box → neutral text. */
@@ -658,13 +747,10 @@ async function submitPay(f) {
   // Bills within the threshold save Reason and Note as blanks.
   const values = { "Paid date": fd.get("date"), "Paid amount": amount, "Notes": (v && !over) ? null : (fd.get("note") || null) };
   if (row.Source === "Bill") values["Reason if different"] = over ? reason : null;
-  if (f.querySelector('[name="statement"]')) { const st = fd.get("statement"); values["Statement amount"] = isVal(st) ? +st : null; }
+  // Recording a payment never changes the known amount — unless the "Also change the known amount" box is ticked.
+  const updKnown = isKnown(row) && fd.get("updknown") && Math.abs(total - knownAmt(row)) >= 0.005;
+  if (updKnown) values["Statement amount"] = Math.round(total * 100) / 100;
   if (f.querySelector('[name="extra"]')) { values["Extra paid amount"] = extra; values["Extra paid date"] = extra ? fd.get("date") : null; }
   state.openRow = null;
-  await writeRow(row, values, `Saved ${esc(row.Bill)} · ${money(total)} on ${shortD(fd.get("date"))}`);
-}
-async function saveStatement(id) {
-  const f = document.querySelector(`form[data-form="pay"][data-id="${CSS.escape(id)}"]`), row = reg().find(r => r.RowID === id);
-  const v = f.querySelector('[name="statement"]').value;
-  await writeRow(row, { "Statement amount": isVal(v) ? +v : null }, isVal(v) ? `Saved the ${esc(row.Bill)} statement: ${money(+v)}. The plan uses it now.` : `Cleared the ${esc(row.Bill)} statement amount.`);
+  await writeRow(row, values, `Saved ${esc(row.Bill)} · ${money(total)} on ${shortD(fd.get("date"))}${updKnown ? " · known amount updated" : ""}`);
 }

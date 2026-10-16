@@ -47,7 +47,7 @@ function viewMonth() {
       ${payRows.length ? `<ul class="payday-list">${payRows.map(r => {
         const done = r.Remaining <= 0, st = status(r);
         return `<li class="${done ? "done" : ""}">
-          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}<span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
+          <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${amountBadge(r)}<span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
           <div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
           <div>${done ? (r["Paid date"] ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
               : `<button class="btn small ghost" data-act="open-pay" data-id="${esc(r.RowID)}" title="Autopaid — enter the real amount if it was different">Record payment</button>`) :
@@ -139,22 +139,23 @@ function billTable(vm) {
     if (grp !== g) { g = grp; html += `<tr class="group ${grp === "Last month's bills" ? "last" : ""}"><td colspan="12">${esc(grp)}${grp === "Last month's bills" ? `<small>${prevM} bills paid with ${thisM} cash</small>` : ""}</td></tr>`; }
     const st = status(r), cm = r["Cash month"];
     const flag = r.Source === "Debt" && (debtsById[r.ItemID] || {}).Flag === "Unexpected balance";
-    const open = state.openRow === r.RowID;
+    const open = state.openRow === r.RowID, amtOpen = state.amtRow === r.RowID;
     html += `<tr>
       <td><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
       <td><div class="b-name">${esc(r.Bill)} ${typeTag(r)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
       <td>${shortD(r["Due date"])}${r.Rule === "End of service month" ? `<div class="b-detail">pay by ${shortD(r["Pay by"])}</div>` : ""}</td>
       <td class="amt">${st.c === "info" ? "—" : money(minOf(r))}</td>
-      <td class="amt sug">${st.c === "info" ? "—" : isPaid(r) ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : isPaid(r) ? (r["Paid date"] ? "paid" : "autopaid") : esc(basisOf(r))}</span></td>
+      <td class="amt sug">${st.c === "info" ? "—" : isPaid(r) ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : isPaid(r) ? (r["Paid date"] ? "paid" : "autopaid") : isVarBill(r) ? amountBadge(r) : esc(basisOf(r))}</span>${knownDiff(r)}</td>
       <td>${esc(r["Pay from"] || "")}</td>
       <td class="b-why detail-only">${esc(r.Why || "")}</td>
       <td class="detail-only mono-s">${esc(r.Rule || "")}<br>must ${money(r["Remaining must"])} · extra ${money(r["Extra planned"])}${+r["Extra unfunded"] > 0 ? ` · unfunded ${money(r["Extra unfunded"])}` : ""}</td>
       <td>${cm ? `<span class="auto-chip" title="Fills in automatically from the paid or planned date">${monthName(cm, { month: "short" })} cash</span>` : `<span class="hint">—</span>`}</td>
       <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : isAutopaid(r) ? `${shortD(effDate(r))}<span class="money">${money(effAmt(r))}</span><div class="b-detail">autopay</div>` : "—"}${varText(r) ? `<div class="b-detail">${esc(varText(r))}</div>` : ""}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
-      <td class="r">${st.c === "info" ? `<button class="btn small" data-act="go-friday">Enter balance</button>` :
-        `<button class="btn small ${r.Remaining > 0 ? "" : "ghost"}" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${r["Paid date"] ? (open ? "Close" : "🔒 Unlock to edit") : "Record payment"}</button>`}</td>
+      <td class="r"><div class="row-acts">${st.c === "info" ? `<button class="btn small" data-act="go-friday">Enter balance</button>` :
+        `${amountBtn(r)}<button class="btn small ${r.Remaining > 0 ? "" : "ghost"}" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${r["Paid date"] ? (open ? "Close" : "🔒 Unlock to edit") : "Record payment"}</button>`}</div></td>
     </tr>`;
-    if (open) html += `<tr class="formrow"><td colspan="12">${payForm(r)}</td></tr>`;
+    if (amtOpen) html += `<tr class="formrow"><td colspan="12">${amountForm(r)}</td></tr>`;
+    else if (open) html += `<tr class="formrow"><td colspan="12">${payForm(r)}</td></tr>`;
   }
   return `<section class="card card-pad">
     <div class="card-head"><h2>Bills for ${monthName(vm)}</h2><span class="hint">${rows.length} bills · Suggested = what the plan says to pay · Minimum = the least you can pay. Cards appear only when they have a balance.</span></div>
@@ -435,7 +436,7 @@ function viewDetails() {
     ${DB.tblExportCardPlan.filter(c => c.RowID).map(c => `<tr><td>${c.Block}</td><td class="mono-s">${esc(c.RowID)}</td><td class="r money">${money(c["Extra placed"])}</td><td>${esc(c["Pay-from text"])}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No card extras in the plan.</td></tr>`}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Data connection</h2></div>
-    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Built for Gielarowski Financial Model (v2).xlsx. Writes only tblRegister input columns incl. Statement amount (matched by RowID); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
+    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Built for Gielarowski Financial Model (v3).xlsx (also works with v2). Writes only tblRegister payment input columns (matched by RowID); tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
 }
 
 document.addEventListener("click", async e => {
@@ -448,8 +449,11 @@ document.addEventListener("click", async e => {
   if (act === "prev-month" || act === "next-month") { state.vm = addMonths(state.vm, act === "prev-month" ? -1 : 1); state.openRow = null; state.cat = null; render(); }
   if (act === "go-details") { state.view = "details"; render(); }
   if (act === "go-friday") { state.view = "friday"; render(); }
-  if (act === "open-row") { state.openRow = state.openRow === row.RowID ? null : row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.querySelector("input").focus(); }
+  if (act === "open-row") { state.amtRow = null; state.openRow = state.openRow === row.RowID ? null : row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.querySelector("input").focus(); }
   if (act === "close-row") { state.openRow = null; render(); }
+  if (act === "open-amount") { state.openRow = null; state.amtRow = row.RowID; if (state.view !== "month") state.view = "month"; render(); const x = document.querySelector('[data-form="amount"] input'); if (x) { x.scrollIntoView({ block: "center" }); x.focus(); } }
+  if (act === "close-amount") { state.amtRow = null; render(); }
+  if (act === "clear-amount") await clearAmount(t.dataset.id);
   if (act === "quick-pay") { row._paidToday = true; await writeRow(row, { "Paid date": META.asOf, "Paid amount": +row["Payday amount"] }, `Marked ${esc(row.Bill)} paid · ${money(row["Payday amount"])} on ${shortD(META.asOf)}`); }
   if (act === "undo-row") { await writeRow(row, { "Paid date": null, "Paid amount": null }, `Cleared the payment for ${esc(row.Bill)}`); }
   if (act === "unlock-row") { state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) { f.scrollIntoView({ block: "center" }); f.querySelector("input").focus(); } }
@@ -458,7 +462,6 @@ document.addEventListener("click", async e => {
   if (act === "lock-friday") { state.fri.unlocked = false; render(); }
   if (act === "clear-row") { state.openRow = null; await writeRow(row, { "Paid date": null, "Paid amount": null, "Extra paid date": null, "Extra paid amount": null, "Reason if different": null }, `Cleared the payment for ${esc(row.Bill)}`); }
   if (act === "open-pay") { state.view = "month"; state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.scrollIntoView({ block: "center" }); }
-  if (act === "save-statement") await saveStatement(t.dataset.id);
   if (act === "pay-clear") await clearPaycheck(t.dataset.person, t.dataset.date);
   if (act === "pay-unlock") { state.fri.payUnlocked = t.dataset.date; render(); }
   if (act === "bt-unlock") { state.btUnlocked = t.dataset.id; render(); }
@@ -474,6 +477,7 @@ document.addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   if (f.dataset.form === "pay") await submitPay(f);
+  if (f.dataset.form === "amount") await submitAmount(f);
   if (f.dataset.form === "friday") await saveFriday(new FormData(f), fridayInfo(state.fri.date));
   if (f.dataset.form === "paychecks") await savePaychecks(new FormData(f), f.dataset.date);
   if (f.dataset.form === "bt") await saveBT(f);
