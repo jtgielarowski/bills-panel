@@ -36,7 +36,7 @@ function paneToday() {
       const done = r.Remaining <= 0, st = status(r);
       return `<li class="${done ? "done" : ""}">
         <div class="p-li-main"><div class="pl-name">${esc(r.Bill)}</div>
-          <div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}<span>due ${shortD(r["Due date"])}</span></div></div>
+          <div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${amountBadge(r)}<span>due ${shortD(r["Due date"])}</span></div></div>
         <div class="p-li-side"><div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
           ${done ? (r["Paid date"] ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
                  : `<button class="btn small ghost" data-act="open-pay" data-id="${esc(r.RowID)}" aria-label="Record ${esc(r.Bill)} payment">Record payment</button>`)
@@ -114,20 +114,20 @@ function paneBills() {
   for (const r of rows) {
     const grp = groupOf(r, vm);
     if (grp !== g) { g = grp; html += `<li class="p-group ${grp === "Last month's bills" ? "last" : ""}">${esc(grp)}</li>`; }
-    const st = status(r), open = state.openRow === r.RowID;
+    const st = status(r), amtOpen = state.amtRow === r.RowID, open = state.openRow === r.RowID || amtOpen;
     html += `<li class="p-bill ${open ? "open" : ""}">
       <button class="p-bill-btn" ${st.c === "info" ? `data-act="go-pane" data-pane="friday"` : `data-act="open-row" data-id="${esc(r.RowID)}"`} aria-expanded="${open}">
         <span class="pill st ${st.c}">${esc(st.t)}</span>
         <span class="p-bill-name">${esc(r.Bill)} ${typeTag(r)}${autoTag(r)}<small>${r["Paid date"] ? `🔒 Paid ${shortD(r["Paid date"])} · ${open ? "unlocked" : "tap to unlock"}` : isAutopaid(r) ? `Autopaid ${shortD(effDate(r))} · tap to record the real amount` : `due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}`}</small></span>
         ${isPaid(r) ? `<span class="amts"><span class="sug">${money(r["Paid total"])}</span><span class="sub">${varText(r) ? esc(varText(r)) : r["Paid date"] ? "paid" : "autopaid"}</span></span>`
           : st.c === "info" ? `<span class="amts"><span class="sub">enter balance</span></span>`
-          : `<span class="amts"><span class="sug">${money(sugOf(r))}</span><span class="sub">${typeOf(r) === "Card" ? `min <b>${money(minOf(r))}</b>` : esc(basisOf(r))}</span></span>`}
+          : `<span class="amts"><span class="sug">${money(sugOf(r))}</span><span class="sub">${typeOf(r) === "Card" ? `min <b>${money(minOf(r))}</b>` : isVarBill(r) ? amountBadge(r) : esc(basisOf(r))}</span>${knownDiff(r)}</span>`}
       </button>
-      ${open ? `<div class="p-form">${payForm(r)}${source.kind === "excel" ? `<button class="linkish" type="button" data-act="show-row" data-id="${esc(r.RowID)}">Show this row in the workbook</button>` : ""}</div>` : ""}
+      ${open ? `<div class="p-form">${amtOpen ? amountForm(r) : payForm(r)}${source.kind === "excel" ? `<button class="linkish" type="button" data-act="show-row" data-id="${esc(r.RowID)}">Show this row in the workbook</button>` : ""}</div>` : ""}
     </li>`;
   }
   return `<div class="p-monthnav"><button class="icon-btn" data-act="prev-month" aria-label="Previous month">‹</button><b>${monthName(vm)}</b><button class="icon-btn" data-act="next-month" aria-label="Next month">›</button></div>
-    <p class="hint" style="margin:0"><b>Suggested</b> = what the plan says to pay · <b>min</b> = the least you can pay. ${'<span class="typ fixed">FIXED</span>'} same every time · <span class="typ var">VARIABLE</span> type the statement · <span class="typ card">CARD</span> credit card</p>
+    <p class="hint" style="margin:0"><b>Suggested</b> = what the plan says to pay · <b>min</b> = the least you can pay. ${'<span class="typ fixed">FIXED</span>'} same every time · <span class="typ var">VARIABLE</span> set the amount when the bill arrives · <span class="typ card">CARD</span> credit card</p>
     <div class="seg p-seg" role="group" aria-label="Show">${[["todo", "To pay"], ["paid", "Paid"], ["all", "All"]].map(([k, l]) => `<button data-act="filter" data-f="${k}" aria-pressed="${state.billFilter === k}">${l} <span class="hint">${counts[k]}</span></button>`).join("")}</div>
     ${statusKey()}
     <ul class="p-bills">${html || `<li class="empty">${state.billFilter === "todo" ? "Everything this month is paid. 🎉" : "Nothing here."}</li>`}</ul>`;
@@ -192,14 +192,16 @@ document.addEventListener("click", async e => {
   if (act === "open-details") openFull("details");
   if (act === "prev-month" || act === "next-month") { state.vm = addMonths(state.vm, act === "prev-month" ? -1 : 1); state.openRow = null; render(); }
   if (act === "filter") { state.billFilter = t.dataset.f; state.openRow = null; render(); }
-  if (act === "open-row") { state.openRow = state.openRow === row.RowID ? null : row.RowID; render(); const f = document.querySelector(`[data-form="pay"] input`); if (f) f.focus(); }
+  if (act === "open-row") { const was = state.openRow === row.RowID || state.amtRow === row.RowID; state.amtRow = null; state.openRow = was ? null : row.RowID; render(); const f = document.querySelector(`[data-form="pay"] input`); if (f) f.focus(); }
   if (act === "close-row") { state.openRow = null; render(); }
+  if (act === "open-amount") { state.pane = "bills"; state.billFilter = "todo"; state.vm = row.Month < monthKey(META.asOf) ? monthKey(META.asOf) : state.vm; state.openRow = null; state.amtRow = row.RowID; render(); const x = document.querySelector('[data-form="amount"] input'); if (x) { x.scrollIntoView({ block: "center" }); x.focus(); } }
+  if (act === "close-amount") { state.amtRow = null; render(); }
+  if (act === "clear-amount") { await clearAmount(t.dataset.id); sendData(); }
   if (act === "show-row") await ExcelSource.select("tblRegister", row.RowID);
   if (act === "quick-pay") { row._paidToday = true; await writeRow(row, { "Paid date": META.asOf, "Paid amount": +row["Payday amount"] }, `Marked ${esc(row.Bill)} paid · ${money(row["Payday amount"])}`); }
   if (act === "undo-row") await writeRow(row, { "Paid date": null, "Paid amount": null }, `Cleared the payment for ${esc(row.Bill)}`);
   if (act === "unlock-row") { state.pane = "bills"; state.vm = row.Month < monthKey(META.asOf) ? monthKey(META.asOf) : state.vm; state.billFilter = "paid"; state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.scrollIntoView({ block: "center" }); }
   if (act === "open-pay") { state.pane = "bills"; state.vm = row.Month < monthKey(META.asOf) ? monthKey(META.asOf) : state.vm; state.billFilter = "todo"; state.openRow = row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.scrollIntoView({ block: "center" }); }
-  if (act === "save-statement") { await saveStatement(t.dataset.id); sendData(); }
   if (act === "pay-clear") { await clearPaycheck(t.dataset.person, t.dataset.date); sendData(); }
   if (act === "pick-friday") { state.fri.date = t.dataset.date; state.fri.unlocked = false; render(); }
   if (act === "unlock-friday") { state.fri.unlocked = true; render(); const x = document.querySelector('[data-form="friday"] input'); if (x) x.focus(); }
@@ -212,6 +214,7 @@ document.addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
   if (f.dataset.form === "pay") await submitPay(f);
+  if (f.dataset.form === "amount") await submitAmount(f);
   if (f.dataset.form === "friday") await saveFriday(new FormData(f), fridayInfo(state.fri.date));
   sendData();
 });
