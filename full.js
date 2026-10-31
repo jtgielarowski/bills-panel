@@ -6,15 +6,16 @@ function render() {
   $("#modeDetailed").setAttribute("aria-pressed", String(state.detailed));
   $("#sampleBanner").hidden = source.kind !== "sample";
   $("#closeFull").hidden = source.kind !== "dialog";
-  const v = { month: viewMonth, friday: viewFriday, spending: viewSpending, budget: viewBudget, debts: viewDebts, details: viewDetails }[state.view];
+  const v = { month: viewMonth, friday: viewFriday, spending: viewSpending, budget: viewBudget, story: viewStory, debts: viewDebts, details: viewDetails }[state.view];
   $("#app").innerHTML = v();
   if (state.view === "month") drawCashBuild();
+  if (state.view === "story") drawStoryTrend();
   if (state.view === "debts") { drawDadLoan(); drawBT(); }
   if (state.view === "budget") drawTrend();
 }
 
 function monthBar(extra = "") {
-  const fails = +META.checksFailing || 0;
+  const fails = +META.checksFailing || 0, warns = +META.checksWarning || 0;
   const n = paydaysIn(state.vm).length;
   return `<section class="monthbar">
     <div class="month-title">
@@ -26,7 +27,7 @@ function monthBar(extra = "") {
       </div>
       <div class="today">Today is ${fmtD(META.asOf, { weekday: "long", month: "long", day: "numeric" })} · ${n} payday${n === 1 ? "" : "s"} this month${extra}</div>
     </div>
-    <button class="health ${fails ? "bad" : ""}" data-act="go-details"><span class="dot"></span>${fails ? `${fails} model check${fails === 1 ? "" : "s"} need attention` : "Model health: all checks passed"}</button>
+    <button class="health ${fails ? "bad" : warns ? "warn" : ""}" data-act="go-details"><span class="dot"></span>${fails ? `${fails} model check${fails === 1 ? "" : "s"} need attention` : warns ? `All checks passed · ${warns} warning${warns === 1 ? "" : "s"}` : "Model health: all checks passed"}</button>
   </section>${keyLine()}`;
 }
 
@@ -43,21 +44,19 @@ function viewMonth() {
   ${monthBar()}
   <section class="today-grid">
     <div class="card payday">
-      <div class="payday-head"><h2>Pay this Friday · ${fmtD(cur, { month: "short", day: "numeric" })}</h2><span>${payRows.filter(r => r.Remaining > 0).length} to pay</span></div>
+      <div class="payday-head"><h2>Pay this Friday · ${fmtD(cur, { month: "short", day: "numeric" })}</h2><span>${payRows.filter(r => r.Remaining > 0 && !isAutoBill(r)).length} to pay${payRows.some(r => r.Remaining > 0 && isAutoBill(r)) ? ` · ${payRows.filter(r => r.Remaining > 0 && isAutoBill(r)).length} auto pay` : ""}</span></div>
       ${payRows.length ? `<ul class="payday-list">${payRows.map(r => {
         const done = r.Remaining <= 0, st = status(r);
         return `<li class="${done ? "done" : ""}">
           <div><div class="pl-name">${esc(r.Bill)}</div><div class="pl-note"><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${amountBadge(r)}<span>due ${shortD(r["Due date"])}</span>${r["Extra wanted"] > 0 ? `<span>full balance</span>` : ""}</div></div>
           <div class="pl-amt">${money(done ? r["Paid total"] : r["Payday amount"])}</div>
-          <div>${done ? (r["Paid date"] ? `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">🔒 Unlock</button>`
-              : `<button class="btn small ghost" data-act="open-pay" data-id="${esc(r.RowID)}" title="Autopaid — enter the real amount if it was different">Record payment</button>`) :
-            quickPayOk(r) ? `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`
-            : `<button class="btn small primary" data-act="open-pay" data-id="${esc(r.RowID)}">Record payment</button>`}</div>
+          <div>${rowAction(r)}</div>
         </li>`; }).join("")}</ul>` : `<p class="empty">Nothing left to pay from this payday.</p>`}
       <div class="payday-foot">
         <span>Total: <strong class="money">${money(sum(payRows.filter(r => r.Remaining > 0), r => r["Payday amount"]))}</strong></span>
         <span>After paying, PNC should have about <strong class="money">${money(curPlan ? curPlan["Cash after"] : null)}</strong> until ${fmtD(META.nextPayday)}.</span>
       </div>
+      ${cashMath(curPlan)}
     </div>
     <div class="stack">
       <div class="card card-pad">
@@ -74,10 +73,12 @@ function viewMonth() {
 
   <section class="kpis" aria-label="Key numbers">
     ${kpi("Coming in", money(k.comingIn), `Received so far: ${money(k.received)}`, "Every paycheck deposited this month.")}
-    ${kpi("Going out", money(k.goingOut), `Paid so far: ${money(k.paidSoFar)}`, "Everything this month's paychecks pay, including early bills for next month.")}
-    ${kpi("Left at month end", money(k.left), "If everything goes to plan", "What should still be in PNC after the last payday's bills.", "v-good")}
+    ${k.forecast ? kpi("Going out", money(k.goingOut), "Forecast · from the Monthly Story", "This month's bills paid with this month's cash, plus one-off expenses. Past the paycheck plan, so it comes from the Monthly Story.")
+      : kpi("Going out", money(k.goingOut), `Paid so far: ${money(k.paidSoFar)}`, "Everything this month's paychecks pay, including early bills for next month.")}
+    ${k.forecast ? kpi("Left at month end", money(k.left), "Forecast · this month's pay minus its bills", "Past the paycheck plan: this month's paychecks minus its bills (Monthly Story). Not a PNC balance.", k.left < 0 ? "v-bad" : "v-good")
+      : kpi("Left at month end", money(k.left), "If everything goes to plan", "What should still be in PNC after the last payday's bills.", "v-good")}
     ${kpi("Bills paid", `${k.paidN} of ${k.total}`, "Includes last month's leftovers", "Green rows in the bill list.")}
-    ${kpi("Needs attention", `${k.late} late`, `${k.soon} more due within ${META.soonOrangeDays} days`, "Dark-red and orange rows below.", k.late ? "v-bad" : "")}
+    ${kpi("Needs attention", `${k.late} urgent`, `${k.soon} more due soon`, "Red badges (urgent) and orange badges (due soon) below. Yellow, blue and green never count.", k.late ? "v-bad" : "")}
     ${kpi("Lowest balance ahead", money(k.low ? k.low["Cash after"] : null), k.low ? `${fmtD(k.low.Payday)} · cushion ${money(META.cushion, 0)} ${k.low["Cash after"] >= META.cushion ? "✓" : "— short"}` : "", "The tightest point between now and the end of next month.", k.low && k.low["Cash after"] < META.cushion ? "v-bad" : "v-good")}
     ${kpi("Mid-week spend", money(k.midweek), midweekSub(k.midweek), "PNC money spent between Fridays that isn't a recorded bill (from the Friday PNC entries). Not part of the bill totals.")}
   </section>
@@ -97,7 +98,7 @@ function viewMonth() {
 
   <section class="twocol">
     ${earlyBox(vm)}
-    <div class="card card-pad"><div class="card-head"><h2>This month's story</h2></div><p class="story">${story(vm, k)}</p></div>
+    ${carriedBox(vm)}
   </section>`;
 }
 /* Mid-week spend for the month (tblExportHistory) — shown on its own, never added to bill totals. */
@@ -137,25 +138,24 @@ function billTable(vm) {
   for (const r of rows) {
     const grp = groupOf(r, vm);
     if (grp !== g) { g = grp; html += `<tr class="group ${grp === "Last month's bills" ? "last" : ""}"><td colspan="12">${esc(grp)}${grp === "Last month's bills" ? `<small>${prevM} bills paid with ${thisM} cash</small>` : ""}</td></tr>`; }
-    const st = status(r), cm = r["Cash month"];
+    const st = status(r), cm = r["Cash month"], nb = needsBalance(r);
     const flag = r.Source === "Debt" && (debtsById[r.ItemID] || {}).Flag === "Unexpected balance";
     const open = state.openRow === r.RowID, amtOpen = state.amtRow === r.RowID;
     html += `<tr>
-      <td><span class="pill st ${st.c}">${esc(st.t)}</span>${autoTag(r)}${flag ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
-      <td><div class="b-name">${esc(r.Bill)} ${typeTag(r)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
+      <td><span class="pill st ${st.c}">${esc(st.t)}</span>${flag && !hasTone(r) ? `<span class="flag" title="This card is set to $0 Balance but shows a balance">!</span>` : ""}</td>
+      <td><div class="b-name">${esc(r.Bill)} ${typeTag(r)}${autoTag(r)}</div><div class="b-detail">${esc(r.Detail || "")}</div><span class="mono-s detail-only">${esc(r.RowID)}</span></td>
       <td>${shortD(r["Due date"])}${r.Rule === "End of service month" ? `<div class="b-detail">pay by ${shortD(r["Pay by"])}</div>` : ""}</td>
-      <td class="amt">${st.c === "info" ? "—" : money(minOf(r))}</td>
-      <td class="amt sug">${st.c === "info" ? "—" : isPaid(r) ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${st.c === "info" ? "enter balance" : isPaid(r) ? (r["Paid date"] ? "paid" : "autopaid") : isVarBill(r) ? amountBadge(r) : esc(basisOf(r))}</span>${knownDiff(r)}</td>
+      <td class="amt">${nb ? "—" : money(minOf(r))}</td>
+      <td class="amt sug">${nb ? "—" : isPaid(r) ? money(r["Paid total"]) : money(sugOf(r))}<span class="sub">${nb ? "enter balance" : isPaid(r) ? (r["Paid date"] ? "paid" : "auto-paid") : isAutoBill(r) ? "auto pay" : isVarBill(r) ? amountBadge(r) : esc(basisOf(r))}</span>${knownDiff(r)}</td>
       <td>${esc(r["Pay from"] || "")}</td>
       <td class="b-why detail-only">${esc(r.Why || "")}</td>
       <td class="detail-only mono-s">${esc(r.Rule || "")}<br>must ${money(r["Remaining must"])} · extra ${money(r["Extra planned"])}${+r["Extra unfunded"] > 0 ? ` · unfunded ${money(r["Extra unfunded"])}` : ""}</td>
       <td>${cm ? `<span class="auto-chip" title="Fills in automatically from the paid or planned date">${monthName(cm, { month: "short" })} cash</span>` : `<span class="hint">—</span>`}</td>
       <td class="paidcell">${r["Paid date"] ? `${shortD(r["Paid date"])}<span class="money">${money(r["Paid amount"])}</span>${r["Extra paid amount"] ? `<span class="money">+ ${money(r["Extra paid amount"])}</span>` : ""}` : isAutopaid(r) ? `${shortD(effDate(r))}<span class="money">${money(effAmt(r))}</span><div class="b-detail">autopay</div>` : "—"}${varText(r) ? `<div class="b-detail">${esc(varText(r))}</div>` : ""}${r["Needs reason"] === true ? `<div class="b-detail" style="color:var(--late-bg)">Pick a reason</div>` : r["Reason if different"] ? `<div class="b-detail">${esc(r["Reason if different"])}</div>` : ""}</td>
-      <td class="r"><div class="row-acts">${st.c === "info" ? `<button class="btn small" data-act="go-friday">Enter balance</button>` :
-        `${amountBtn(r)}<button class="btn small ${r.Remaining > 0 ? "" : "ghost"}" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${r["Paid date"] ? (open ? "Close" : "🔒 Unlock to edit") : "Record payment"}</button>`}</div></td>
+      <td class="r"><div class="row-acts">${nb ? `<button class="btn small" data-act="go-friday">Enter balance</button>` : billActs(r, open)}</div></td>
     </tr>`;
-    if (amtOpen) html += `<tr class="formrow"><td colspan="12">${amountForm(r)}</td></tr>`;
-    else if (open) html += `<tr class="formrow"><td colspan="12">${payForm(r)}</td></tr>`;
+    if (amtOpen && canSetAmount(r)) html += `<tr class="formrow"><td colspan="12">${amountForm(r)}</td></tr>`;
+    else if (open && (recordOk(r) || canUnlock(r))) html += `<tr class="formrow"><td colspan="12">${payForm(r)}</td></tr>`;
   }
   return `<section class="card card-pad">
     <div class="card-head"><h2>Bills for ${monthName(vm)}</h2><span class="hint">${rows.length} bills · Suggested = what the plan says to pay · Minimum = the least you can pay. Cards appear only when they have a balance.</span></div>
@@ -167,22 +167,54 @@ function billTable(vm) {
   </section>`;
 }
 
+/* Bill table actions: auto pay rows get none (never written); a saved payment can be unlocked; Set amount and
+   Record payment only where tblRegister[Record allowed] = TRUE. */
+function billActs(r, open) {
+  if (isAutoBill(r)) return isPaid(r) ? "" : `<span class="noact" title="The bank drafts it on the due date. Nothing to record.">Bank drafts it</span>`;
+  if (canUnlock(r)) return `<button class="btn small ghost" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">${open ? "Close" : "🔒 Unlock to edit"}</button>`;
+  if (!recordOk(r)) return "";
+  return `${amountBtn(r)}<button class="btn small" data-act="open-row" data-id="${esc(r.RowID)}" aria-expanded="${open}">Record payment</button>`;
+}
 
 function earlyBox(vm) {
   const nxt = addMonths(vm, 1);
   const rows = reg().filter(r => r.Month === nxt && r["Cash month"] === vm && r.Applies);
   return `<div class="card card-pad early"><div class="card-head"><h2>${monthName(nxt, { month: "long" })} bills paid early with ${monthName(vm, { month: "long" })} cash</h2></div>
-  ${rows.length ? `<ul>${rows.map(r => `<li>${esc(r.Bill)} <span class="money">${money(r.Amount)}</span> · due ${shortD(r["Due date"])} · ${esc(r["Pay from"] || "")}</li>`).join("")}</ul>
+  ${rows.length ? `<ul>${rows.map(r => `<li>${esc(r.Bill)}${autoTag(r)} <span class="money">${money(r.Amount)}</span> · due ${shortD(r["Due date"])} · <span class="pill st ${status(r).c}">${esc(status(r).t)}</span></li>`).join("")}</ul>
   <p class="note" style="color:inherit">Total ${money(sum(rows, r => r.Amount))}. The first ${monthName(nxt, { month: "long" })} payday comes too late for these.</p>` : `<p class="note" style="color:inherit">None this month.</p>`}</div>`;
 }
-function story(vm, k) {
-  const nxt = addMonths(vm, 1), prv = addMonths(vm, -1);
-  const early = sum(reg().filter(r => r.Month === nxt && r["Cash month"] === vm), r => r.Amount);
-  const carried = sum(viewRows(vm).filter(r => r.Month === prv), r => r.Amount);
-  const spend = sum(DB.tblCardLog.filter(l => monthKey(l.Date) === vm), l => l.Spending);
-  return `In ${monthName(vm, { month: "long" })} we expect <b>${money(k.comingIn, 0)}</b> to come in and <b>${money(k.goingOut, 0)}</b> to go out with this month's money, leaving about <b>${money(k.left, 0)}</b> in PNC at month end.
-   ${early > 0 ? `${money(early, 0)} of that pays next month's bills early. ` : ""}${carried > 0 ? `${money(carried, 0)} covers last month's bills paid this month. ` : ""}
-   ${spend ? `Cards picked up ${money(spend, 0)} of new spending so far. ` : ""}${k.midweek > 0.005 ? `Mid-week spending from PNC (money not tied to a recorded bill) is ${money(k.midweek, 0)} so far. ` : k.midweek < -0.005 ? `PNC has ${money(-k.midweek, 0)} more than the recorded bills and paychecks predicted. ` : ""}So far ${k.paidN} of ${k.total} bills are paid.`;
+/* "Carried over from last month": earlier months' bills paid with this month's cash (tblRegister story columns),
+   footer from tblExportStory [Carried in], [Carried in unpaid], [Carried in count]. */
+function carriedBox(vm) {
+  const rows = reg().filter(r => r["Story cash month"] === vm && r.Month < vm && (+r.Expected || 0) > 0)
+    .sort((a, b) => (a["Due date"] < b["Due date"] ? -1 : 1));
+  const st = storyRow(vm), n = st ? +st["Carried in count"] || 0 : rows.length;
+  return `<div class="card card-pad carried"><div class="card-head"><h2>Carried over from last month</h2><span class="hint">Earlier months' bills paid with ${monthName(vm, { month: "long" })} cash</span></div>
+  ${rows.length ? `<div class="table-wrap"><table class="data compact"><thead><tr><th>Bill</th><th>Bill's month</th><th>Due</th><th class="r">Amount</th><th>Pay from</th></tr></thead><tbody>
+    ${rows.map(r => { const s2 = status(r); return `<tr><td>${esc(r.Bill)}${autoTag(r)}</td><td>${monthName(r.Month, { month: "short", year: "numeric" })}</td><td>${shortD(r["Due date"])}</td><td class="r money">${money(r.Expected)}</td>
+      <td><span class="pill st ${s2.c}">${esc(s2.t)}</span><div class="hint">${esc(r["Pay from"] || "")}</div></td></tr>`; }).join("")}
+  </tbody></table></div>` : `<p class="note" style="margin:0">Nothing carried over into ${monthName(vm, { month: "long" })}.</p>`}
+  ${st ? `<p class="carried-foot">Total <b class="money">${money(st["Carried in"])}</b> · <b class="money">${money(st["Carried in unpaid"])}</b> still unpaid · ${n} bill${n === 1 ? "" : "s"}</p>` : ""}</div>`;
+}
+
+/* Under the Pay this Friday total: how "PNC until next payday" is worked out (Engine C7–C12 → tblExportMeta
+   startCash / anchor, tblCashLog, tblExportPlan). Every number is the workbook's; the lines tie out. */
+function cashMath(curPlan) {
+  const bank = META.hasBankEntry === true ? DB.tblCashLog.filter(c => c.Date === META.anchor && isVal(c["PNC balance"])).at(-1) : null;
+  const start = +META.startCash || 0, entered = bank ? +bank["PNC balance"] : null;
+  const moneyIn = curPlan ? +curPlan["Money in"] || 0 : 0, still = curPlan ? +curPlan["Total out"] || 0 : 0;
+  const after = curPlan ? +curPlan["Cash after"] : null;
+  if (after === null) return "";
+  const between = round2(after - (start + moneyIn - still));      // only when the PNC entry is older than this Friday
+  const line = (sign, label, v, cls = "") => `<li class="${cls}"><span class="cm-sign">${sign}</span><span class="cm-label">${label}</span><span class="money">${money(v)}</span></li>`;
+  return `<div class="cashmath" aria-label="How the expected PNC balance is worked out"><div class="cm-title">How we get there</div><ol>
+    ${entered !== null ? line("", `PNC balance you entered · ${fmtD(META.anchor)}`, entered) + line("−", "Payments already marked paid since then", entered - start) : line("", "Opening cash (no PNC entry yet)", start)}
+    ${line("=", "Start cash", start, "sub")}
+    ${moneyIn ? line("+", "Paychecks not in that balance yet", moneyIn) : ""}
+    ${Math.abs(between) >= 0.005 ? line(between > 0 ? "+" : "−", "Earlier paydays since your entry (net)", Math.abs(between)) : ""}
+    ${line("−", "Still to pay from this payday", still)}
+    ${line("=", `Expected in PNC until ${fmtD(META.nextPayday)}`, after, "total")}
+  </ol></div>`;
 }
 
 /* ---------------- cash-build chart */
@@ -351,6 +383,190 @@ function drawTrend() {
 }
 function rbar(x, y, w, h) { if (h <= 0) return ""; const r = Math.min(4, h, w / 2); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`; }
 
+/* ---------------- Monthly Story (v4) — mirrors the Excel "Monthly Story" sheet.
+   Data: tblExportStory (one row per month), tblExportCategory [Locked plan, Expected, Story variance] and the
+   tblRegister story columns [Locked plan, Expected, Story variance, Variance reason, Timing, Story cash month,
+   Frequency, Non-recurring]. The workbook does every sum; this view only lays the numbers out and draws them.
+   Plan = frozen on the 1st (Plan Lock). Actual / expected = paid so far + what the model still expects. */
+state.storyOpen = state.storyOpen || { variances: true };
+const sgn = (v, d = 0) => { v = +v || 0; return (v > 0.005 ? "+" : v < -0.005 ? "−" : "") + money(Math.abs(v), d); };
+const tone = v => (+v > 0.005 ? "neg" : +v < -0.005 ? "pos" : "");          // bills: more out = red, less out = green
+const toneUp = v => (+v > 0.005 ? "pos" : +v < -0.005 ? "neg" : "");        // money: more left = green
+function storyTile(label, value, sub, cap, cls = "") {
+  return `<div class="st-tile"><div class="st-label">${label}</div><div class="st-value money ${cls}">${value}</div><div class="st-sub">${sub}</div><div class="st-cap">${cap}</div></div>`;
+}
+function storySteps(s) {
+  return [
+    ["Paychecks vs plan", +s["Income diff"], "Actual / expected deposits minus the plan"],
+    ["Budget changes after the lock", -s["Budget changes"], "A bill's budget changed mid-month"],
+    ["Bill amounts vs budget", -s["Bill amount diffs"], "Statements higher (−) or lower (+) than budget"],
+    ["Debt payments vs plan", -s["Debt payment diffs"], "Extra (−) or smaller (+) card / loan payments"],
+    ["Carried in from last month", -s["Carried in"], "Last month's bills paid with this month's cash"],
+    ["Pushed to next month", +s["Carried out"], "This month's bills paid with next month's cash"],
+    ["Already paid last month", +s["Paid early last month"], "This month's bills paid early with last month's cash"],
+    ["Next month's bills paid early", -s["Paid early for next month"], "Next month's bills paid from this month's cash"],
+    ["One-off expenses", -s["Other expenses"], "Other Expenses tab"],
+    ["Everyday PNC spending", -s["Everyday spending"], "Spending between Fridays (from the Friday PNC balances)"],
+  ].map(([label, v, why]) => ({ label, v: round2(v), why }));
+}
+/* Horizontal waterfall (HTML, so it reads on a phone): Planned left over → each step → Expected left over. */
+function waterfall(s) {
+  const steps = storySteps(s), plan0 = +s["Planned left over"] || 0, end = +s["Expected left over"] || 0;
+  let run = plan0;
+  const rows = [{ label: "Planned left over", sub: "Locked paychecks minus locked bills", a: 0, b: plan0, v: plan0, kind: "total" }];
+  steps.forEach(x => { rows.push({ label: x.label, sub: x.why, a: run, b: run + x.v, v: x.v, kind: Math.abs(x.v) < 0.005 ? "zero" : x.v > 0 ? "up" : "down" }); run += x.v; });
+  rows.push({ label: s.Status === "Past" ? "Left over" : "Expected left over", sub: "Should match the Left over tile", a: 0, b: end, v: end, kind: "total" });
+  const lo = Math.min(0, ...rows.flatMap(r => [r.a, r.b])), hi = Math.max(0, ...rows.flatMap(r => [r.a, r.b])), span = hi - lo || 1;
+  const pct = v => ((v - lo) / span) * 100, zero = pct(0);
+  const ties = Math.abs(run - end) < 0.01 && Math.abs(+s["Bridge check"] || 0) < 0.005;
+  return `<div class="wf" role="img" aria-label="Planned left over ${money(plan0, 0)} to ${money(end, 0)}, step by step">
+    ${rows.map(r => `<div class="wf-row ${r.kind}">
+      <div class="wf-label"><b>${esc(r.label)}</b><small>${esc(r.sub)}</small></div>
+      <div class="wf-track">${lo < 0 ? `<i class="wf-zero" style="left:${zero}%"></i>` : ""}<i class="wf-bar" style="left:${pct(Math.min(r.a, r.b))}%;width:${Math.max(r.kind === "zero" ? 0 : 0.6, (Math.abs(r.b - r.a) / span) * 100)}%"></i></div>
+      <div class="wf-val money">${r.kind === "total" ? money(r.v, 0) : r.kind === "zero" ? "—" : sgn(r.v, 0)}</div>
+    </div>`).join("")}
+  </div>
+  <p class="st-check ${ties ? "ok" : "bad"}">${ties ? "✓ Steps add up to the left over (Bridge check = 0)." : `⚠ Steps don't add up (Bridge check ${money(s["Bridge check"])}) — see Model details ▸ checks.`}</p>`;
+}
+function storyCats(vm, s) {
+  const cats = DB.tblExportCategory.filter(c => c.Month === vm);
+  const max = Math.max(1, ...cats.map(c => Math.max(+c["Locked plan"] || 0, +c.Expected || 0)));
+  const tot = { p: sum(cats, c => c["Locked plan"]), e: sum(cats, c => c.Expected) };
+  const ties = Math.abs(tot.e - (+s["Bills expected"] || 0)) < 0.01;
+  const shown = cats.filter(c => (+c["Locked plan"] || 0) || (+c.Expected || 0));
+  const vp = (v, p) => p ? `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v / p * 1000) / 10)}%` : "—";
+  return `<div class="legend"><span><i class="sw" style="background:var(--story-plan)"></i>Planned (locked)</span><span><i class="sw" style="background:var(--story-head)"></i>${s.Status === "Past" ? "Actual" : "Actual / expected"}</span></div>
+  <div class="catbars">${shown.map(c => `<div class="cb-row"><span class="cb-name">${esc(c.Category)}</span>
+      <span class="cb-bars"><i style="width:${(+c["Locked plan"] || 0) / max * 100}%;background:var(--story-plan)" title="Planned ${money(c["Locked plan"])}"></i><i style="width:${(+c.Expected || 0) / max * 100}%;background:var(--story-head)" title="Actual / expected ${money(c.Expected)}"></i></span>
+      <span class="cb-v money ${tone(c["Story variance"])}">${Math.abs(+c["Story variance"] || 0) >= 0.005 ? sgn(c["Story variance"]) : "on plan"}</span></div>`).join("") || `<p class="empty">No bills this month.</p>`}</div>
+  <div class="table-wrap"><table class="data st-table"><thead><tr><th>Category</th><th class="r">Planned</th><th class="r">Actual / expected</th><th class="r">Variance</th><th class="r">Var %</th></tr></thead><tbody>
+    ${cats.map(c => `<tr><td>${esc(c.Category)}</td><td class="r money">${money(c["Locked plan"])}</td><td class="r money">${money(c.Expected)}</td><td class="r money ${tone(c["Story variance"])}">${Math.abs(+c["Story variance"] || 0) >= 0.005 ? sgn(c["Story variance"], 2) : "—"}</td><td class="r">${Math.abs(+c["Story variance"] || 0) >= 0.005 ? vp(+c["Story variance"], +c["Locked plan"]) : "—"}</td></tr>`).join("")}
+    <tr class="tot"><td>Total</td><td class="r money">${money(tot.p)}</td><td class="r money">${money(tot.e)}</td><td class="r money ${tone(tot.e - tot.p)}">${Math.abs(tot.e - tot.p) >= 0.005 ? sgn(tot.e - tot.p, 2) : "—"}</td><td class="r">${Math.abs(tot.e - tot.p) >= 0.005 ? vp(tot.e - tot.p, tot.p) : "—"}</td></tr>
+  </tbody></table></div>
+  <p class="st-check ${ties ? "ok" : "bad"}">${ties ? "✓ Matches Bills for the month." : "⚠ Categories don't add up to Bills for the month."}</p>`;
+}
+/* Six months around the selected one, like the sheet: start = max(2, min(row − 2, rows − 5)) (1-based). */
+function storyTrendRows(vm) {
+  const all = DB.tblExportStory, i = all.findIndex(x => x.Month === vm) + 1;
+  const start = Math.max(2, Math.min(i - 2, all.length - 5));
+  return all.slice(start - 1, start + 5);
+}
+function storyDrill(key, title, hint, rows, head, cell, total) {
+  const open = !!state.storyOpen[key];
+  return `<details class="st-drill" data-drill="${key}" ${open ? "open" : ""}><summary><span>${title}</span><span class="hint">${rows.length ? `${rows.length} bill${rows.length === 1 ? "" : "s"}${total !== undefined ? ` · ${money(total)}` : ""}` : "none"}</span></summary>
+    <p class="hint" style="margin:6px 0 8px">${hint}</p>
+    ${rows.length ? `<div class="table-wrap"><table class="data st-table"><thead><tr>${head.map(h => `<th class="${/Planned|Actual|Amount|Variance|Paid$/.test(h) ? "r" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cell(r).map(c => `<td${c.startsWith("<!--r-->") ? ' class="r money"' : ""}>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="empty">None this month.</p>`}
+  </details>`;
+}
+const R = v => `<!--r-->${money(v)}`;
+const stPill = r => { const x = status(r); return `<span class="pill st ${x.c}">${esc(x.t)}</span>`; };
+const billName = r => `${esc(r.Bill)}${autoTag(r)}`;
+const mShort = m => m ? monthName(m, { month: "short", year: "numeric" }) : "—";
+function viewStory() {
+  const vm = state.vm, s = storyRow(vm), all = DB.tblExportStory;
+  if (!s) return `${monthBar()}<section class="card card-pad"><h2>No Monthly Story for ${monthName(vm)}</h2><p class="note">The story covers ${all.length ? `${esc(all[0].Label)} – ${esc(all.at(-1).Label)}` : "the months in tblExportStory"}. Use ‹ › to pick a month.</p></section>`;
+  const past = s.Status === "Past", actLabel = past ? "Actual" : "Actual / expected";
+  const locked = s["Plan locked?"] === true;
+  const mRows = reg().filter(r => r.Month === vm && (r.Applies || (+r.Expected || 0) || (+r["Locked plan"] || 0)));
+  const byDue = (a, b) => (a["Due date"] < b["Due date"] ? -1 : a["Due date"] > b["Due date"] ? 1 : String(a.Bill).localeCompare(String(b.Bill)));
+  const variances = mRows.filter(r => Math.abs(+r["Story variance"] || 0) >= 0.005).sort((a, b) => Math.abs(b["Story variance"]) - Math.abs(a["Story variance"]));
+  const carried = reg().filter(r => r["Story cash month"] === vm && r.Month < vm && (+r.Expected || 0) > 0).sort(byDue);
+  const pushed = reg().filter(r => r.Month === vm && r["Story cash month"] > vm && (+r.Expected || 0) > 0).sort(byDue);
+  const early = reg().filter(r => r["Story cash month"] === vm && r.Month > vm && (+r.Expected || 0) > 0).sort(byDue);
+  const nonrec = mRows.filter(r => r["Non-recurring"] === true).sort(byDue);
+  const every = mRows.slice().sort(byDue);
+  const trend = storyTrendRows(vm);
+  const inc = +s["Income diff"] || 0, lod = +s["Left over diff"] || 0, bv = +s["Bills variance"] || 0;
+  return `${monthBar()}
+  <section class="card st-head">
+    <div class="st-title"><div><span class="eyebrow">Monthly Story</span><h2>${monthName(vm)}</h2></div>
+      <div class="st-badges"><span class="sbadge ${esc(String(s.Status).toLowerCase())}" title="Past = finished · Current = this month · Future = not started">${esc(s.Status)}</span>${locked ? `<span class="sbadge lock" title="The plan was frozen on the 1st (Plan Lock). Later budget changes show as variances.">Plan locked 🔒</span>` : `<span class="sbadge unlocked" title="Not locked yet — the plan uses today's budgets until the month is locked.">Plan not locked yet</span>`}</div></div>
+    <p class="st-intro">What we planned at the start of the month vs. what ${past ? "actually happened" : "has happened so far plus what the model still expects"}. <b>Plan</b> = frozen on the 1st.</p>
+    <div class="st-tiles">
+      ${storyTile("Paychecks", money(s["Income expected"], 0), `Plan ${money(s["Income planned"], 0)} · ${Math.abs(inc) < 0.5 ? "on plan" : `<span class="${toneUp(inc)}">${sgn(inc)}</span>`}`, `Received so far ${money(s["Income received"], 0)}`)}
+      ${storyTile("Bills for the month", money(s["Bills expected"], 0), `Plan ${money(s["Bills planned"], 0)}`, `Paid ${money(s["Bills paid so far"], 0)} · ${money(s["Bills still to pay"], 0)} to go`)}
+      ${storyTile("Bills vs plan", Math.abs(bv) < 0.5 ? "On plan" : sgn(bv), `Amounts ${sgn(s["Bill amount diffs"])} · Debt ${sgn(s["Debt payment diffs"])}${Math.abs(+s["Budget changes"] || 0) >= 0.5 ? ` · Budget changes ${sgn(s["Budget changes"])}` : ""}`, "+ means more went out than planned", tone(bv))}
+      ${storyTile("Carried in", money(s["Carried in"], 0), `${+s["Carried in count"] || 0} bill${+s["Carried in count"] === 1 ? "" : "s"} · ${money(s["Carried in unpaid"], 0)} still unpaid`, "Last month's bills paid with this month's cash")}
+      ${storyTile("Non-recurring", money(s["Non-recurring bills"], 0), esc(s["Non-recurring items"] || "None this month"), "Quarterly / annual bills — explains a month that looks high")}
+      ${storyTile("Left over", money(s["Expected left over"], 0), `Plan ${money(s["Planned left over"], 0)} · <span class="${toneUp(lod)}">${Math.abs(lod) < 0.5 ? "on plan" : sgn(lod)}</span>`, "After bills, one-offs and everyday spending", +s["Expected left over"] < 0 ? "neg" : "")}
+    </div>
+    <div class="st-headline"><span class="eyebrow">The story in one paragraph</span><p>${esc(s.Headline || "")}</p></div>
+  </section>
+
+  <section class="twocol st-two">
+    <div class="card card-pad st-card"><div class="st-h"><h3>1 · How the plan turned into what's left over</h3></div>
+      <div class="legend"><span><i class="sw" style="background:var(--story-head)"></i>Total</span><span><i class="sw" style="background:var(--story-green)"></i>Helped</span><span><i class="sw" style="background:var(--story-red)"></i>Hurt</span></div>
+      ${waterfall(s)}
+    </div>
+    <div class="card card-pad st-card"><div class="st-h"><h3>2 · Planned vs ${actLabel.toLowerCase()} by category</h3></div>
+      <p class="hint" style="margin:0 0 8px">Bills that belong to ${monthName(vm, { month: "long" })}, whenever they're paid.</p>
+      ${storyCats(vm, s)}
+    </div>
+  </section>
+
+  <section class="card card-pad st-card"><div class="st-h"><h3>3 · Month by month — why some months run high</h3></div>
+    <div class="legend"><span><i class="sw" style="background:var(--story-head)"></i>Recurring</span><span><i class="sw" style="background:var(--story-amber)"></i>Non-recurring</span><span><i class="sw" style="background:var(--story-plan)"></i>Carried in</span><span><i class="sw-dash"></i>Bills planned</span></div>
+    <div class="chart-wrap" id="storyTrend"></div><div class="tip" id="stTip" hidden></div>
+    <div class="table-wrap"><table class="data st-table" style="margin-top:10px"><thead><tr><th>Month</th><th class="r">Planned bills</th><th class="r">Recurring</th><th class="r">Non-recurring</th><th class="r">Carried in</th><th class="r">Left over</th></tr></thead><tbody>
+      ${trend.map(t => `<tr class="${t.Month === vm ? "sel" : ""}"><td>${esc(t.Label)}${t.Month === vm ? " ◂" : ""}</td><td class="r money">${money(t["Bills planned"], 0)}</td><td class="r money">${money(t["Recurring bills"], 0)}</td><td class="r money">${money(t["Non-recurring bills"], 0)}</td><td class="r money">${money(t["Carried in"], 0)}</td><td class="r money ${+t["Expected left over"] < 0 ? "neg" : ""}">${money(t["Expected left over"], 0)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="hint" style="margin:8px 0 0">Recurring + non-recurring = the month's own bills. Carried in = last month's bills paid with this month's cash.</p>
+  </section>
+
+  <section class="card card-pad st-card"><div class="st-h"><h3>4 · Drill-downs — the bills behind every number</h3></div>
+    ${storyDrill("variances", "Variances — where it differs from the locked plan", "Largest first. Why = Variance reason from the workbook.", variances,
+      ["Bill", "Category", "Planned", actLabel, "Variance", "Why"], r => [billName(r), esc(r.Category), R(r["Locked plan"]), R(r.Expected), `<!--r--><span class="${tone(r["Story variance"])}">${sgn(r["Story variance"], 2)}</span>`, esc(r["Variance reason"] || "")])}
+    ${storyDrill("carried", "Carried in — last month's bills paid with this month's cash", "Bills from an earlier month whose cash comes out this month.", carried,
+      ["Bill", "Bill's month", "Due", "Amount", "Status"], r => [billName(r), mShort(r.Month), shortD(r["Due date"]), R(r.Expected), `${stPill(r)}<div class="hint">${esc(r["Pay from"] || "")}</div>`], sum(carried, r => r.Expected))}
+    ${storyDrill("pushed", "Pushed to next month — this month's bills paid with next month's cash", "This month's bills whose cash comes out next month.", pushed,
+      ["Bill", "Cash month", "Due", "Amount", "Status"], r => [billName(r), mShort(r["Story cash month"]), shortD(r["Due date"]), R(r.Expected), `${stPill(r)}<div class="hint">${esc(r["Pay from"] || "")}</div>`], sum(pushed, r => r.Expected))}
+    ${storyDrill("early", "Paid early — next month's bills paid from this month's cash", "Bills from a later month whose cash comes out this month.", early,
+      ["Bill", "Bill's month", "Due", "Amount", "Status"], r => [billName(r), mShort(r.Month), shortD(r["Due date"]), R(r.Expected), `${stPill(r)}<div class="hint">${esc(r["Pay from"] || "")}</div>`], sum(early, r => r.Expected))}
+    ${storyDrill("nonrec", "Non-recurring — quarterly / annual bills this month", "Bills that don't come every month.", nonrec,
+      ["Bill", "How often", "Planned", actLabel, "Variance", "Status"], r => [billName(r), esc(r.Frequency || ""), R(r["Locked plan"]), R(r.Expected), `<!--r--><span class="${tone(r["Story variance"])}">${Math.abs(+r["Story variance"] || 0) >= 0.005 ? sgn(r["Story variance"], 2) : "—"}</span>`, stPill(r)], sum(nonrec, r => r.Expected))}
+    ${storyDrill("every", "Every bill this month", "All of this month's bills, by due date.", every,
+      ["Bill", "Category", "Planned", actLabel, "Paid", "Timing", "Status"], r => [billName(r), esc(r.Category), R(r["Locked plan"]), R(r.Expected), R(r["Paid total"]), esc(r.Timing || "—"), stPill(r)], sum(every, r => r.Expected))}
+  </section>`;
+}
+/* 6-month trend: stacked Recurring / Non-recurring / Carried in columns + dashed "Bills planned" line; selected month highlighted.
+   Drawn at the container's real width so labels stay readable on a phone. */
+function drawStoryTrend() {
+  const el = $("#storyTrend"); if (!el) return;
+  const vm = state.vm, rows = storyTrendRows(vm);
+  const W = Math.max(300, Math.round(el.clientWidth || 860)), H = W < 520 ? 220 : 260, L = W < 520 ? 44 : 60, R = 10, T = 14, B = 28;
+  const tops = rows.map(t => (+t["Recurring bills"] || 0) + (+t["Non-recurring bills"] || 0) + (+t["Carried in"] || 0));
+  const max = Math.max(1, ...tops, ...rows.map(t => +t["Bills planned"] || 0));
+  const step = niceStep(max / 4), top = Math.ceil(max / step) * step, y = v => T + (H - T - B) * (1 - v / top);
+  const gw = (W - L - R) / rows.length, bw = Math.min(56, gw * 0.56);
+  const k = v => W < 520 ? (v >= 1000 ? `$${Math.round(v / 1000)}k` : money(v, 0)) : money(v, 0);
+  let g = ""; for (let v = 0; v <= top + 1; v += step) g += `<line class="${v ? "grid" : "base"}" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${k(v)}</text>`;
+  const bars = rows.map((t, i) => {
+    const cx = L + gw * i + gw / 2, x0 = cx - bw / 2, sel = t.Month === vm;
+    const segs = [["Recurring", +t["Recurring bills"] || 0, "var(--story-head)"], ["Non-recurring", +t["Non-recurring bills"] || 0, "var(--story-amber)"], ["Carried in", +t["Carried in"] || 0, "var(--story-plan)"]];
+    let base = 0;
+    const rects = segs.map(([n, v, c]) => { if (v <= 0) return ""; const r = `<rect x="${x0}" y="${y(base + v)}" width="${bw}" height="${y(base) - y(base + v)}" fill="${c}"${sel ? "" : ' opacity=".55"'}/>`; base += v; return r; }).join("");
+    return `${sel ? `<rect x="${cx - gw / 2 + 2}" y="${T - 6}" width="${gw - 4}" height="${H - B - T + 6}" rx="6" fill="var(--story-soft)"/>` : ""}${rects}
+      <rect x="${cx - gw / 2}" y="${T}" width="${gw}" height="${H - B - T}" fill="transparent" data-i="${i}" class="st-hit"/>
+      <text class="axis" x="${cx}" y="${H - 8}" text-anchor="middle" style="${sel ? "font-weight:700;fill:var(--story-head)" : ""}">${esc(t.Label.replace(" 20", " '"))}</text>`;
+  }).join("");
+  const line = rows.map((t, i) => `${i ? "L" : "M"}${L + gw * i + gw / 2},${y(+t["Bills planned"] || 0)}`).join("");
+  const dots = rows.map((t, i) => `<circle cx="${L + gw * i + gw / 2}" cy="${y(+t["Bills planned"] || 0)}" r="3.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.5"/>`).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Bills by month: recurring, non-recurring and carried in, with the planned bills line; ${esc(storyRow(vm) ? storyRow(vm).Label : "")} highlighted">${g}${bars}<path d="${line}" fill="none" stroke="var(--ink)" stroke-width="1.6" stroke-dasharray="6 4"/>${dots}</svg>`;
+  const tip = $("#stTip");
+  el.querySelectorAll(".st-hit").forEach(h => {
+    h.addEventListener("mousemove", e => {
+      const t = rows[+h.dataset.i], bb = el.getBoundingClientRect();
+      tip.hidden = false;
+      tip.innerHTML = `<b>${esc(t.Label)}</b><div><span>Recurring</span><span class="v">${money(t["Recurring bills"], 0)}</span></div><div><span>Non-recurring</span><span class="v">${money(t["Non-recurring bills"], 0)}</span></div><div><span>Carried in</span><span class="v">${money(t["Carried in"], 0)}</span></div><div><span>Bills planned</span><span class="v">${money(t["Bills planned"], 0)}</span></div>`;
+      tip.style.left = Math.min(bb.width - 190, e.clientX - bb.left + 12) + "px"; tip.style.top = (el.offsetTop + 10) + "px";
+    });
+    h.addEventListener("mouseleave", () => { tip.hidden = true; });
+  });
+}
+document.addEventListener("toggle", e => { const d = e.target; if (d.matches && d.matches("details[data-drill]")) state.storyOpen[d.dataset.drill] = d.open; }, true);
+let storyResize = null;
+window.addEventListener("resize", () => { if (state.view !== "story") return; clearTimeout(storyResize); storyResize = setTimeout(drawStoryTrend, 150); });
+
 /* ---------------- Debts */
 function viewDebts() {
   const bt = DB.tblDebts.find(d => d["Expected category"] === "Balance Transfer");
@@ -422,9 +638,9 @@ function drawDadLoan() {
 /* ---------------- Model details (advanced view) */
 function viewDetails() {
   return `${monthBar()}
-  <section class="card card-pad"><div class="card-head"><h2>Model checks</h2><span class="hint">From the Checks tab</span></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Check</th><th>Result</th><th>What to do if it fails</th></tr></thead><tbody>
-    ${DB.tblExportChecks.map(c => `<tr><td>${esc(c.Check)}</td><td><span class="pill ${c.Result === "PASS" ? "paid" : "late"}">${esc(c.Result)}</span></td><td class="hint">${esc(c["What to do"])}</td></tr>`).join("")}
+  <section class="card card-pad"><div class="card-head"><h2>Model checks</h2><span class="hint">From the Checks tab (tblExportChecks) · PASS green · WARN yellow (warning only) · FAIL red</span></div>
+    <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>Check</th><th>Result</th><th>What to do if it fails</th></tr></thead><tbody>
+    ${DB.tblExportChecks.filter(c => isVal(c.Check)).map((c, i) => `<tr><td class="hint">${i + 1}</td><td>${esc(c.Check)}</td><td><span class="pill ${c.Result === "PASS" ? "paid" : c.Result === "WARN" ? "warn" : "late"}">${esc(c.Result)}</span></td><td class="hint">${esc(c["What to do"])}</td></tr>`).join("")}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Paycheck planner</h2><span class="hint">tblExportPlan · must-pays placed on the latest safe payday, then card extras from truly free cash</span></div>
     <div class="table-wrap"><table class="data"><thead><tr><th>Payday</th><th class="r">Money in</th><th class="r">Must-pay out</th><th class="r">Card extras</th><th class="r">Total out</th><th class="r">Cash after</th><th>Below cushion</th></tr></thead><tbody>
@@ -435,8 +651,21 @@ function viewDetails() {
     <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>Register row</th><th class="r">Extra placed</th><th>Plan</th></tr></thead><tbody>
     ${DB.tblExportCardPlan.filter(c => c.RowID).map(c => `<tr><td>${c.Block}</td><td class="mono-s">${esc(c.RowID)}</td><td class="r money">${money(c["Extra placed"])}</td><td>${esc(c["Pay-from text"])}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No card extras in the plan.</td></tr>`}
     </tbody></table></div></section>
-  <section class="card card-pad"><div class="card-head"><h2>Data connection</h2></div>
-    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory and tblDadSchedule. Built for Gielarowski Financial Model (v3).xlsx (also works with v2). Writes only tblRegister payment input columns (matched by RowID); tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; and tblMonths[Month closed?].</p></section>`;
+  <section class="card card-pad"><div class="card-head"><h2>Data connection</h2><span class="pill info">Dashboard ${VERSION}</span></div>
+    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Dashboard ${VERSION}, built for <b>Gielarowski Financial Model (v4).xlsx</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblExportStory, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule and tblPlanLock. Writes only: tblRegister payment input columns (matched by RowID) where Record allowed = TRUE or to correct a saved payment — never an auto pay row; tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; tblMonths[Month closed?]; and <b>tblPlanLock — new rows only</b> (values, never formulas; existing lock rows are never edited or deleted).</p></section>
+  <section class="card card-pad"><div class="card-head"><h2>What's new in ${VERSION}</h2><span class="hint">For Gielarowski Financial Model (v4) · Lists &amp; Notes change log, Oct 31, 2026</span></div>
+    <ol class="changes">
+      <li><b>Status badges come from the workbook.</b> Text = tblRegister[Status], colour = tblRegister[Badge tone] (red / orange / yellow / blue / green / purple / none). No due-date maths in the dashboard — e.g. a bill with Pay with set shows yellow "Needs Paid - Paying with Fri 11/6 Paycheck". Same badge in Pay this Friday, the bill list, the panel and Monthly Story.</li>
+      <li><b>Auto pay.</b> Rows with Autopay bill = TRUE show a blue AUTO PAY tag and no Record payment / Set amount / Mark paid / Unlock. They stay visible and are never written to; the model counts them paid on the draft date. Record payment, Set amount and Mark paid appear only where Record allowed = TRUE (a saved, non-auto pay payment can still be unlocked).</li>
+      <li><b>ESTIMATE tag</b> only when Amount type = Variable, Amount known? = FALSE and Autopay bill = FALSE.</li>
+      <li><b>Pay this Friday cash math:</b> PNC balance entered → minus payments marked paid since → start cash → minus still to pay → expected PNC until next payday (Engine C7–C12 via tblExportMeta, tblCashLog, tblExportPlan).</li>
+      <li><b>This month:</b> "This month's story" box removed; new "Carried over from last month" box (Story cash month = month, earlier bill month, Expected &gt; 0) with tblExportStory Carried in / unpaid / count.</li>
+      <li><b>Future months:</b> inside the paycheck plan (now 2 months ahead) Going out / Left at month end come from tblExportPlan; past it they are labelled forecasts from tblExportStory (Bills cash + Other expenses; Expected left over) instead of $0.</li>
+      <li><b>New Monthly Story tab</b> (tblExportStory, tblExportCategory Locked plan / Expected / Story variance, tblRegister story columns): tiles, headline, plan → left over waterfall (ties to Bridge check = 0), category chart + variance table, 6-month trend, drill-downs, Past / Current / Future and Plan locked badges.</li>
+      <li><b>Auto-lock the plan:</b> on load, the Excel panel appends the Current month to tblPlanLock when Plan locked? = FALSE (one row per register row with Applies = TRUE + the INCOME row last; values only, one call). tblPlanLock is now on the write list.</li>
+      <li><b>Refresh:</b> changing month or saving anything re-reads every table, so views update without pressing Refresh.</li>
+      <li><b>Checks rows 21–22</b> (story ties out; month locked) shown from tblExportChecks; WARN is yellow and counted separately (checksWarning). "Needs attention" counts red badges (urgent) and orange badges (due soon).</li>
+    </ol></section>`;
 }
 
 document.addEventListener("click", async e => {
@@ -446,9 +675,10 @@ document.addEventListener("click", async e => {
   if (t.id === "modeDetailed") { state.detailed = true; render(); return; }
   if (t.dataset.act === "close-full") { DialogSource.send({ t: "close" }); return; }
   const act = t.dataset.act, row = t.dataset.id ? reg().find(r => r.RowID === t.dataset.id) : null;
-  if (act === "prev-month" || act === "next-month") { state.vm = addMonths(state.vm, act === "prev-month" ? -1 : 1); state.openRow = null; state.cat = null; render(); }
+  if (act === "prev-month" || act === "next-month") { state.vm = addMonths(state.vm, act === "prev-month" ? -1 : 1); state.openRow = null; state.amtRow = null; state.cat = null; await refreshData(); render(); }
   if (act === "go-details") { state.view = "details"; render(); }
   if (act === "go-friday") { state.view = "friday"; render(); }
+  if (["open-row", "open-amount", "open-pay", "quick-pay", "unlock-row"].includes(act) && row && (isAutoBill(row) || (!recordOk(row) && !canUnlock(row)))) return;   // auto pay / not allowed: never written
   if (act === "open-row") { state.amtRow = null; state.openRow = state.openRow === row.RowID ? null : row.RowID; render(); const f = document.querySelector(`[data-form="pay"]`); if (f) f.querySelector("input").focus(); }
   if (act === "close-row") { state.openRow = null; render(); }
   if (act === "open-amount") { state.openRow = null; state.amtRow = row.RowID; if (state.view !== "month") state.view = "month"; render(); const x = document.querySelector('[data-form="amount"] input'); if (x) { x.scrollIntoView({ block: "center" }); x.focus(); } }
@@ -513,7 +743,7 @@ const DialogSource = {
 /* ========================================================================= start */
 (async () => {
   const want = location.hash.slice(1);
-  if (["month", "friday", "spending", "budget", "debts", "details"].includes(want)) state.view = want;
+  if (["month", "friday", "spending", "budget", "story", "debts", "details"].includes(want)) state.view = want;
   if (want === "details") state.detailed = true;
   const inDialog = new URLSearchParams(location.search).get("host") === "dialog";
   if (inDialog && window.Office) {
