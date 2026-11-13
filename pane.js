@@ -164,6 +164,7 @@ async function onDialogMessage(arg) {
     busyUntil = Date.now() + 60000;
     try { await source.write(m.change); await reload(); } catch (e) { ok = false; err = e.message || String(e); }
     finally { busyUntil = Date.now() + 1500; }
+    if (ok && m.change.table === "tblCashLog") { try { await autoSnapPlan(); } catch (e) { console.warn("Plan snapshot failed", e); } }
     render();
     fullDialog && fullDialog.messageChild(JSON.stringify({ t: "ack", id: m.id, ok, err }));
   }
@@ -174,12 +175,14 @@ let refreshTimer = null;
 function scheduleRefresh() {
   if (Date.now() < busyUntil) return;          // our own write
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(async () => { await reload(); render(); sendData(); }, 700);
+  refreshTimer = setTimeout(async () => { await reload(); try { await autoSnapPlan(); } catch (e) { console.warn("Plan snapshot failed", e); } render(); sendData(); }, 700);
 }
 async function watchWorkbook() {
   if (!Office.context.requirements.isSetSupported("ExcelApi", "1.7")) return;
   await Excel.run(async ctx => {
     ["tblRegister", "tblCardLog", "tblCashLog", "tblOther", "tblMonths", "tblDebts", "tblPaychecks", "tblPlanLock"].forEach(n => ctx.workbook.tables.getItem(n).onChanged.add(scheduleRefresh));
+    const pp = ctx.workbook.tables.getItemOrNullObject("tblPaydayPlan"); await ctx.sync();
+    if (!pp.isNullObject) pp.onChanged.add(scheduleRefresh);
     await ctx.sync();
   });
 }
@@ -190,7 +193,8 @@ document.addEventListener("click", async e => {
   if (t.classList.contains("p-tab")) { state.pane = t.dataset.pane; state.openRow = null; render(); window.scrollTo({ top: 0 }); return; }
   const act = t.dataset.act, row = t.dataset.id ? reg().find(r => r.RowID === t.dataset.id) : null;
   if (act === "go-pane") { state.pane = t.dataset.pane; state.openRow = null; render(); window.scrollTo({ top: 0 }); }
-  if (act === "refresh") { await guarded(async () => { await reload(); }); render(); sendData(); toast("Refreshed from the workbook."); if (await autoLockPlan()) { render(); sendData(); } }
+  if (act === "refresh") { await guarded(async () => { await reload(); }); render(); sendData(); toast("Refreshed from the workbook."); if (await autoLockPlan()) { render(); sendData(); } if (await autoSnapPlan()) { render(); sendData(); } }
+  if (act === "go-friday") { state.pane = "friday"; state.openRow = null; render(); window.scrollTo({ top: 0 }); }
   if (act === "open-full") openFull("month");
   if (act === "open-details") openFull("details");
   if (act === "prev-month" || act === "next-month") { state.vm = addMonths(state.vm, act === "prev-month" ? -1 : 1); state.openRow = null; await refreshData(); render(); }
@@ -238,6 +242,7 @@ document.addEventListener("submit", async e => {
   index(); render();
   if (source.kind === "excel") {
     try { if (await autoLockPlan()) render(); } catch (e) { console.warn("Auto-lock failed", e); }
+    try { if (await autoSnapPlan()) render(); } catch (e) { console.warn("Plan snapshot failed", e); }
     try { Office.context.document.settings.set("Office.AutoShowTaskpaneWithDocument", true); Office.context.document.settings.saveAsync(); } catch (e) {}
     try { await watchWorkbook(); } catch (e) { console.warn("Change tracking unavailable", e); }
   }

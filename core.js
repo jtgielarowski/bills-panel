@@ -4,12 +4,13 @@
    The workbook is the engine. This code only reads the export/contract tables,
    shows them, and writes the few input columns listed below. No numbers live
    in this file; everything comes from the open workbook.
-   Dashboard v4 · built for Gielarowski Financial Model (v4).xlsx (the add-in reads whichever workbook is open;
+   Dashboard v4.2 · built for Gielarowski Financial Model (v6).xlsx (the add-in reads whichever workbook is open;
    v4 needs the v4 columns: tblRegister Badge tone / Record allowed / Autopay bill / story columns, tblExportStory, tblPlanLock).
 
    READS : tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory,
            tblExportCategory, tblExportChecks, tblExportStory, tblRegister, tblDebts, tblCardLog,
-           tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule, tblPlanLock
+           tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule, tblPlanLock,
+           tblPaydayPlan (optional — v6 workbooks; older workbooks still load without it)
    WRITES: tblRegister payment input columns (matched by RowID) — only where tblRegister[Record allowed] = TRUE
            (or a saved payment being corrected), NEVER an auto pay row (tblRegister[Autopay bill] = TRUE);
            tblRegister[Statement amount] alone through "Set amount" (unpaid Variable bills; never touches
@@ -17,7 +18,10 @@
            REPLACES that Friday's row, never adds a second one; tblPaychecks[Actual amount] (Person + Deposit date);
            tblDebts[BT payment mode, Fixed monthly payment] (DebtID); tblOther new rows; tblMonths[Month closed?];
            tblPlanLock — APPEND ONLY (values, never formulas; existing lock rows are never edited or deleted):
-           the panel locks the Current month once, on load, when tblExportStory[Plan locked?] = FALSE.
+           the panel locks the Current month once, on load, when tblExportStory[Plan locked?] = FALSE;
+           tblPaydayPlan — APPEND ONLY: the panel saves each payday's plan once, right after its PNC balance is saved.
+   PAYMENT GATE: a payment dated D is refused until the PNC balance is saved for the latest payday on or before D
+           (the workbook enforces the same rule on This Month[Paid date] / [Extra paid date] with data validation).
 
    change = { table, rowId, values }                  → update one row by its key
           = { table, match:{col:value}, values, upsert } → update the matching row (or add it)
@@ -34,13 +38,15 @@
 
 const TABLES = ["tblExportMeta", "tblExportPlan", "tblExportCardPlan", "tblExportHistory", "tblExportCategory", "tblExportChecks", "tblExportStory",
   "tblRegister", "tblDebts", "tblCardLog", "tblCashLog", "tblOther", "tblPaychecks", "tblMonths", "tblDadHistory", "tblDadSchedule", "tblPlanLock"];
-const VERSION = "v4.1";   // dashboard version (shown on Model details); the cache key in the .html files is separate (?v=20261113)
+const VERSION = "v4.2";   // dashboard version (shown on Model details); the cache key in the .html files is separate (?v=20261113-2)
+/* Tables the dashboard can live without (older workbooks): loaded with getItemOrNullObject; a missing one reads as []. */
+const OPTIONAL_TABLES = ["tblPaydayPlan"];
 const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month", tblDebts: "DebtID" };
 const LOG_TABLES = ["tblCardLog", "tblCashLog", "tblOther"];
 /* A row counts as blank (and is skipped on read) when all of these columns are empty. Other tables: when every cell is empty. */
 const KEY_COLS = { tblRegister: ["RowID"], tblDebts: ["DebtID"], tblMonths: ["Month"], tblPaychecks: ["Person"],
   tblCardLog: ["Date", "Card or loan", "Balance"], tblCashLog: ["Date", "PNC balance"], tblOther: ["Date", "Description", "Amount"],
-  tblBudgetChanges: ["BillID"], tblPlanLock: ["Key"], tblExportStory: ["Month"] };
+  tblBudgetChanges: ["BillID"], tblPlanLock: ["Key"], tblExportStory: ["Month"], tblPaydayPlan: ["Payday", "Key"] };
 const blankCell = v => v === null || v === undefined || v === "";
 const isBlankRow = (table, row) => (KEY_COLS[table] || Object.keys(row)).every(k => blankCell(row[k]));
 /* Columns the dashboard is allowed to write. Anything else is refused, so a bug here can never overwrite a formula. */
@@ -53,6 +59,7 @@ const WRITABLE = {
   tblCashLog: ["Date", "PNC balance", "Note"],
   tblOther: ["Date", "Description", "Category", "Amount", "Status", "Note"],
   tblPlanLock: ["Key", "Month", "Type", "Locked amount", "Locked on", "Note"],   // append only (auto-lock); every column is an input
+  tblPaydayPlan: ["Payday", "Key", "Item", "Planned amount", "Saved on", "Note"], // append only (payday plan snapshot); every column is an input
 };
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -68,10 +75,14 @@ const ExcelSource = {
   available() { return !!(window.Office && window.Excel && Office.context && Office.context.host === Office.HostType.Excel); },
   async load() {
     return Excel.run(async ctx => {
-      const out = {}, ranges = {};
+      const out = {}, ranges = {}, opt = {};
+      for (const n of OPTIONAL_TABLES) { opt[n] = ctx.workbook.tables.getItemOrNullObject(n); opt[n].load("isNullObject"); }
       for (const n of TABLES) { ranges[n] = ctx.workbook.tables.getItem(n).getRange(); ranges[n].load("values, numberFormat"); }
       await ctx.sync();
-      for (const n of TABLES) {
+      const have = OPTIONAL_TABLES.filter(n => !opt[n].isNullObject);
+      for (const n of have) { ranges[n] = opt[n].getRange(); ranges[n].load("values, numberFormat"); }
+      if (have.length) await ctx.sync();
+      for (const n of [...TABLES, ...have]) {
         const [hdr, ...rows] = ranges[n].values, fmts = ranges[n].numberFormat;
         out[n] = rows.map((r, i) => Object.fromEntries(hdr.map((h, j) => [h, fromCell(r[j], fmts[i + 1][j])]))).filter(row => !isBlankRow(n, row));
       }
@@ -210,6 +221,8 @@ function index() {
   META = Object.fromEntries(DB.tblExportMeta.map(r => [r.Key, r.Value]));
   DB.tblRegister.forEach(r => { if ("Story cash month" in r) r["Story cash month"] = asIso(r["Story cash month"]); });
   DB.tblExportStory = DB.tblExportStory || []; DB.tblPlanLock = DB.tblPlanLock || [];
+  if (!("_hasPaydayPlan" in DB)) DB._hasPaydayPlan = Array.isArray(DB.tblPaydayPlan);   // the full view gets DB from the panel, flag included
+  DB.tblPaydayPlan = DB.tblPaydayPlan || [];
   DB.tblPlanLock.forEach(l => { l.Month = asIso(l.Month); });
   debtsById = Object.fromEntries(DB.tblDebts.map(d => [d.DebtID, d]));
   plan = DB.tblExportPlan.filter(p => p.Valid === true && p.Payday);
@@ -435,6 +448,8 @@ async function guarded(fn) {
 }
 async function writeRow(row, values, msg) {
   if (isAutoBill(row)) { toast(`${esc(row.Bill)} is on auto pay — the workbook counts it paid on the draft date, so there's nothing to record.`); return; }
+  const gate = ["Paid date", "Extra paid date"].map(k => values[k]).filter(d => isVal(d)).map(payGate).find(Boolean);
+  if (gate) { toast(esc(gate)); return; }
   const prev = Object.fromEntries(Object.keys(values).map(k => [k, row[k] ?? null]));
   const snap = JSON.parse(JSON.stringify(row)), adjSnap = { ...adjust };
   const ok = await guarded(async () => {
@@ -483,6 +498,49 @@ async function autoLockPlan() {
   const rows = planLockRows(m);
   const ok = await guarded(async () => { await source.write({ table: "tblPlanLock", append: rows, bulk: true }); await reload(); return true; });
   if (ok) toast(`Locked the ${monthName(m, { month: "long" })} plan (${rows.length - 1} bills + paychecks) — the Monthly Story compares against it.`);
+  return ok;
+}
+
+/* =========================================================================
+   Payday plan snapshot (v4.2). The engine re-plans whenever something changes, so once payments are recorded the
+   morning's plan is gone. When a payday's PNC balance is saved, the panel APPENDS that payday's plan to
+   tblPaydayPlan (values only, one call, once per payday; existing rows are never edited or deleted):
+     START    = tblCashLog[Expected balance] − [Paychecks since]  (expected PNC before the paycheck)
+     PAYCHECK = tblCashLog[Paychecks since]
+     one row per tblRegister row with Payday amount > 0, Key = RowID  (the engine's plan for the current payday:
+     must-pay + card extra; the rows add up to tblExportPlan[Total out]).
+   Not taken if a non-auto-pay payment is already dated on or after the payday (it would no longer be the plan);
+   the payment gate below normally makes that impossible. Runs in the Excel panel only, like auto-lock.
+   ========================================================================= */
+const hasSnapTable = () => !!(DB && DB._hasPaydayPlan);
+const snapOf = date => (DB.tblPaydayPlan || []).filter(s => s.Payday === date);
+const cashOn = date => DB.tblCashLog.filter(c => c.Date === date && isVal(c["PNC balance"])).at(-1) || null;
+const paydayOn = date => { const p = paydays.filter(x => x.date <= date); return p.length ? p.at(-1).date : null; };
+/* Payment gate: a payment dated `date` needs the PNC balance saved for the latest payday on or before that date. */
+function payGate(date) {
+  const p = paydayOn(date);
+  if (!p || cashOn(p)) return null;
+  return `Do the Friday update for ${shortD(p)} first (PNC balance) — then you can record payments.`;
+}
+const paidOnOrAfter = d => reg().some(r => !isAutoBill(r) && ((isVal(effDate(r)) && effDate(r) >= d && effAmt(r) > 0) || (isVal(r["Extra paid date"]) && r["Extra paid date"] >= d)));
+function paydayPlanRows(p) {
+  const c = cashOn(p), now = nowSerial(), note = "Saved by dashboard at the Friday update";
+  const pay = round2(c["Paychecks since"]), start = isVal(c["Expected balance"]) ? round2(+c["Expected balance"] - pay) : round2(+c["PNC balance"] - pay);
+  const rows = [{ "Payday": p, "Key": "START", "Item": "Expected starting cash (before paycheck)", "Planned amount": start, "Saved on": now, "Note": note },
+    { "Payday": p, "Key": "PAYCHECK", "Item": "Paychecks this payday", "Planned amount": pay, "Saved on": now, "Note": note }];
+  reg().filter(r => (+r["Payday amount"] || 0) > 0.005)
+    .forEach(r => rows.push({ "Payday": p, "Key": r.RowID, "Item": r.Bill, "Planned amount": round2(r["Payday amount"]), "Saved on": now, "Note": note }));
+  return rows;
+}
+const snapTried = {};
+async function autoSnapPlan() {
+  const p = META.currentPayday;
+  if (!hasSnapTable() || !p || snapTried[p] || !cashOn(p) || snapOf(p).length) return false;
+  snapTried[p] = true;
+  if (paidOnOrAfter(p)) return false;
+  const rows = paydayPlanRows(p);
+  const ok = await guarded(async () => { await source.write({ table: "tblPaydayPlan", append: rows, bulk: true }); await reload(); return true; });
+  if (ok) toast(`Saved the plan for ${shortD(p)} (${rows.length - 2} bill${rows.length === 3 ? "" : "s"}) — the Paycheck plan card compares what you do against it.`);
   return ok;
 }
 
@@ -646,6 +704,7 @@ async function saveFriday(fd, i) {
   const nCards = writes.filter(w => w.table === "tblCardLog").length, nBank = writes.filter(w => w.table === "tblCashLog").length, nPay = pays.length;
   const parts = [nCards ? `${nCards} card balance${nCards === 1 ? "" : "s"}` : "", nBank ? "the PNC balance" : "", nPay ? `${nPay} paycheck amount${nPay === 1 ? "" : "s"}` : ""].filter(Boolean);
   if (ok) toast(`Saved ${parts.join(" and ")} for ${shortD(i.date)}. They're locked now.`);
+  if (ok && source.kind === "excel" && await autoSnapPlan()) render();   // the payday's plan, saved before any payment
   return ok;
 }
 async function closeMonth(vm) {
@@ -743,6 +802,8 @@ function rowAction(r, unlockLabel = "🔒 Unlock") {
   if (isAutoBill(r)) return isPaid(r) ? "" : `<span class="noact" title="The bank drafts it on the due date. Nothing to record.">Bank drafts it</span>`;
   if (canUnlock(r)) return `<button class="btn small ghost" data-act="unlock-row" data-id="${esc(r.RowID)}" title="Saved and locked">${unlockLabel}</button>`;
   if (!recordOk(r)) return "";
+  const gate = payGate(META.asOf);
+  if (gate) return `<button class="btn small gate" data-act="go-friday" title="${esc(gate)}">Friday update first</button>`;
   return quickPayOk(r) ? `<button class="btn small primary" data-act="quick-pay" data-id="${esc(r.RowID)}" aria-label="Mark ${esc(r.Bill)} paid">Mark paid</button>`
     : `<button class="btn small primary" data-act="open-pay" data-id="${esc(r.RowID)}" aria-label="Record ${esc(r.Bill)} payment">Record payment</button>`;
 }
@@ -777,7 +838,8 @@ function payForm(r) {
   const total0 = (+amt || 0) + (+r["Extra paid amount"] || 0) * (hasFirst ? 1 : 0);
   const chk = payCheck(r, total0), id = esc(r.RowID);
   const isBill = r.Source === "Bill", v = isBill ? varianceCheck(blankCell(amt) ? null : total0, r.Budget) : null, over = !!v && v.state === "over";
-  return `${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}
+  const gate = payGate(META.asOf);
+  return `${gate ? `<p class="errbox" style="margin:6px 0">✕ ${esc(gate)} A payment dated before this payday can still be saved.</p>` : ""}${hasFirst ? `<p class="lockbar editing" style="margin:6px 0"><span><b>Unlocked.</b> Saving replaces the saved payment; it locks again after you save.</span></p>` : ""}
   <div class="payarea">${payGuide(r)}
   <form class="payform" data-form="pay" data-id="${id}">
     ${isVarBill(r) ? `<p class="kn-line" style="margin:0;width:100%">${isKnown(r) ? `Known amount <b class="money">${money(knownAmt(r))}</b>${amountBadge(r)}` : `No known amount yet — using the ${money(r.Budget)} budget estimate.`} ${amountBtn(r, "linkish")}</p>` : ""}
