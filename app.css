@@ -4,23 +4,42 @@
   /* One light look, matched to the This Month mockup: white cards on a pale green-grey page,
      a charcoal tab bar, green for "do this", blue = John's money, amber = Stephanie's money. */
   color-scheme: light;
+  /* ---- Shared palette (v4.1): copied from the "This Month" sheet of Gielarowski Financial Model (v4).xlsx —
+     its fills, fonts and conditional-format colours. Every view (full dashboard, Excel panel, Paycheck plan,
+     Monthly Story) takes its colours from these; change a colour here and it changes everywhere. */
+  --pal-title: #1d2320;                                   /* section titles (18px bold) and body text */
+  --pal-help: #5b6660;                                    /* helper text */
+  --pal-accent: #3e8e5e; --pal-accent-ink: #ffffff;       /* accent: green with white bold text */
+  --pal-head-bg: #f1f2ef; --pal-head-ink: #3b4640;        /* table headers */
+  --pal-paid-bg: #e4f4e4; --pal-paid-ink: #146c14;        /* paid / on track */
+  --pal-locked-bg: #e6e8e3; --pal-locked-ink: #1d2320;    /* paid & locked / closed */
+  --pal-late-bg: #d03b3b; --pal-late-ink: #ffffff;        /* late */
+  --pal-today-bg: #fde3e3; --pal-today-ink: #9b1c1c;      /* due today / tomorrow */
+  --pal-soon-bg: #fef0c7; --pal-soon-ink: #6e4600;        /* due in 2–5 days */
+  --pal-near-bg: #e3eefb; --pal-near-ink: #1d4e89;        /* due in 6–10 days */
+  --pal-needs-bg: #fff2cc; --pal-needs-ink: #7f6000;      /* needs paid / input needed */
+  --pal-planned-bg: #ddebf7; --pal-planned-ink: #1f4e79;  /* planned, not yet paid (auto pay) */
+  --pal-balance-bg: #ede7f6; --pal-balance-ink: #4a2c82;  /* enter balance */
+  --pal-last-bg: #fff1e6; --pal-last-ink: #7a3b0b;        /* last month's bills */
+  --pal-over-bg: #f4b4b4;                                 /* over budget flag */
+  --pal-fav: #146c14; --pal-unfav: #9b1c1c;               /* favourable / unfavourable amounts */
   --bg: #f4f5f2; --surface: #ffffff; --surface-2: #f7f8f5; --line: #dadddb; --line-soft: #eceeea;
-  --ink: #1d2320; --ink-2: #47524c; --ink-3: #5b6660;
-  --accent: #2e8b57; --accent-ink: #ffffff; --accent-soft: #e5f3ea; --accent-deep: #1e5a38; --bar: #1f2a25; --bar-ink: #cfe6d7;
+  --ink: var(--pal-title); --ink-2: #47524c; --ink-3: var(--pal-help);
+  --accent: var(--pal-accent); --accent-ink: var(--pal-accent-ink); --accent-soft: #e5f3ea; --accent-deep: #1e5a38; --bar: #1f2a25; --bar-ink: #cfe6d7;
   --input: #fff6d1; --input-line: #d9c27a;
   --series-1: #2a6f9e; --series-2: #e3a04a; --series-1-head: #2a6f9e; --series-2-head: #9e6418; --neutral-mark: #c9cec9;
-  --good-bg: #e5f3ea; --good-ink: #1e5a38;
+  --good-bg: var(--pal-paid-bg); --good-ink: var(--pal-paid-ink);
   /* Due-date status scale (escalating severity; every step also has an icon + words) */
-  --st-paid-bg: #e4f4e4; --st-paid-ink: #146c14; --st-paid-line: #0ca30c;
+  --st-paid-bg: var(--pal-paid-bg); --st-paid-ink: var(--pal-paid-ink); --st-paid-line: #0ca30c;
   --st-up-bg: #eef0ec; --st-up-ink: #47524c;
-  --st-near-bg: #e3eefb; --st-near-ink: #1d4e89; --st-near-line: #5b8fd0;
-  --st-soon-bg: #fef0c7; --st-soon-ink: #6e4600; --st-soon-line: #fab219;
-  --st-now-bg: #fde3e3; --st-now-ink: #9b1c1c; --st-now-line: #d03b3b;
-  --st-late-bg: #d03b3b; --st-late-ink: #ffffff;
-  --st-act-bg: #ede7f6; --st-act-ink: #4a2c82;
-  --late-bg: #d03b3b; --late-ink: #ffffff;
-  --red-bg: #fde3e3; --red-ink: #9b1c1c;
-  --info-bg: #e3eefb; --info-ink: #1d4e89;
+  --st-near-bg: var(--pal-near-bg); --st-near-ink: var(--pal-near-ink); --st-near-line: #5b8fd0;
+  --st-soon-bg: var(--pal-soon-bg); --st-soon-ink: var(--pal-soon-ink); --st-soon-line: #fab219;
+  --st-now-bg: var(--pal-today-bg); --st-now-ink: var(--pal-today-ink); --st-now-line: #d03b3b;
+  --st-late-bg: var(--pal-late-bg); --st-late-ink: var(--pal-late-ink);
+  --st-act-bg: var(--pal-balance-bg); --st-act-ink: var(--pal-balance-ink);
+  --late-bg: var(--pal-late-bg); --late-ink: var(--pal-late-ink);
+  --red-bg: var(--pal-today-bg); --red-ink: var(--pal-today-ink);
+  --info-bg: var(--pal-near-bg); --info-ink: var(--pal-near-ink);
   --chip-bg: #eef0ec; --chip-ink: #3b4640;
   --early-bg: #eef4f9; --early-line: #c8d8e6; --early-ink: #1f3f57;
   --warn-bg: #fff1d6; --warn-line: #e8c59a; --warn-ink: #6b4100;
@@ -45,7 +64,7 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 .tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 auto; }
 .tab { background: transparent; border: 0; color: var(--bar-ink); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
 .tab:hover { background: rgba(255,255,255,.07); color: #fff; }
-.tab[aria-selected="true"] { background: #3e8e5e; color: #fff; font-weight: 600; }
+.tab[aria-selected="true"] { background: var(--pal-accent); color: #fff; font-weight: 600; }
 .mode-toggle { display: flex; background: rgba(255,255,255,.06); border-radius: 8px; padding: 3px; }
 .mode-toggle button { background: transparent; border: 0; color: var(--bar-ink); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
 .mode-toggle button[aria-pressed="true"] { background: #fff; color: #17201c; font-weight: 600; }
@@ -420,7 +439,7 @@ table.bills td.amt.sug { font-weight: 600; }
 /* Status badges: text = tblRegister[Status], colour = tblRegister[Badge tone]. Each tone also has an icon. */
 :root { --t-orange-bg: #ffe6d1; --t-orange-ink: #8a3a00; --t-orange-line: #f0892a;
         --t-yellow-bg: #fff6c9; --t-yellow-ink: #6b5400; --t-yellow-line: #e2bd1d;
-        --story-head: #1F4E3D; --story-soft: #E7EFEA; --story-red: #C0392B; --story-green: #2E8B57; --story-amber: #E0A526; --story-plan: #a9bfb3; }
+        --story-head: var(--pal-accent); --story-soft: #f6f8f6; --story-red: var(--pal-unfav); --story-green: var(--pal-fav); --story-amber: #E0A526; --story-plan: #a9bfb3; }   /* v4.1: on the sheet palette (#f6f8f6 = Monthly Story sheet panel fill) */
 .pill.st { white-space: normal; text-align: left; line-height: 1.25; }
 .pill.st.t-red { background: var(--st-now-bg); color: var(--st-now-ink); border-color: var(--st-now-line); } .pill.st.t-red::before { content: "!"; }
 .pill.st.t-orange { background: var(--t-orange-bg); color: var(--t-orange-ink); border-color: var(--t-orange-line); } .pill.st.t-orange::before { content: "⚠"; }
@@ -519,3 +538,51 @@ table.data.compact td, table.data.compact th { padding-top: 6px; padding-bottom:
 .st-drill[open] summary span:first-child::before { content: "▾ "; }
 .st-drill > p, .st-drill > .table-wrap, .st-drill > .empty { margin-left: 14px; margin-right: 14px; }
 .st-drill > .table-wrap { margin-bottom: 12px; }
+
+/* ===================================================================== v4.1 (Nov 13, 2026) — This Month sheet palette */
+/* Status pills: colour from Badge tone + Status text (core.js palOf). Same pills in the dashboard, panel and Monthly Story. */
+.pill.st.p-paid { background: var(--pal-paid-bg); color: var(--pal-paid-ink); border-color: transparent; }
+.pill.st.p-late { background: var(--pal-late-bg); color: var(--pal-late-ink); border-color: transparent; } .pill.st.p-late::before { content: "✕"; }
+.pill.st.p-today { background: var(--pal-today-bg); color: var(--pal-today-ink); border-color: transparent; }
+.pill.st.p-soon { background: var(--pal-soon-bg); color: var(--pal-soon-ink); border-color: transparent; }
+.pill.st.p-near { background: var(--pal-near-bg); color: var(--pal-near-ink); border-color: transparent; }
+.pill.st.p-needs { background: var(--pal-needs-bg); color: var(--pal-needs-ink); border-color: transparent; }
+.pill.st.p-planned { background: var(--pal-planned-bg); color: var(--pal-planned-ink); border-color: transparent; }
+.pill.st.p-balance { background: var(--pal-balance-bg); color: var(--pal-balance-ink); border-color: transparent; }
+/* Last month's bills group rows; saved (locked) values; Over budget flag; amounts */
+.bills tr.group.last td, .p-group.last { background: var(--pal-last-bg); color: var(--pal-last-ink); }
+.locked-val { background: var(--pal-locked-bg); color: var(--pal-locked-ink); }
+td.over { background: var(--pal-over-bg); }
+.v-good { color: var(--pal-fav); } .v-bad { color: var(--pal-unfav); }
+/* Table headers */
+.data thead th, .bills th { background: var(--pal-head-bg); color: var(--pal-head-ink); font-weight: 700; }
+/* Paycheck plan cards */
+.slot-status { background: var(--pal-paid-bg); color: var(--pal-paid-ink); }
+.slot-status.short { background: var(--pal-late-bg); color: var(--pal-late-ink); }
+.slot-status.closed { background: var(--pal-locked-bg); color: var(--pal-locked-ink); }
+.slot .incl { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--pal-help); }
+
+/* ---- Monthly Story: styling only (same markup, data and calculations) */
+#app[data-view="story"], #app[data-view="story"] .money, #app[data-view="story"] .num, #app[data-view="story"] .axis { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+#app[data-view="story"] .hint, #app[data-view="story"] .legend, #app[data-view="story"] .st-cap,
+#app[data-view="story"] .wf-label small, #app[data-view="story"] .st-intro { font-size: 10px; color: var(--pal-help); }
+#app[data-view="story"] .eyebrow { font-size: 10px; color: var(--pal-help); }
+.st-title { background: var(--surface); color: var(--pal-title); border-bottom: 1px solid var(--line); }
+.st-title h2 { font-size: 18px; font-weight: 700; color: var(--pal-title); }
+.st-title .eyebrow { color: var(--pal-help); }
+.st-card .st-h { background: var(--surface); color: var(--pal-title); border-bottom: 1px solid var(--line); }
+.st-card .st-h h3 { font-size: 18px; font-weight: 700; color: var(--pal-title); }
+.sbadge { border-color: transparent; }
+.sbadge.current { background: var(--pal-accent); color: var(--pal-accent-ink); }
+.sbadge.past, .sbadge.lock { background: var(--pal-locked-bg); color: var(--pal-locked-ink); }
+.sbadge.future { background: var(--pal-planned-bg); color: var(--pal-planned-ink); }
+.sbadge.unlocked { background: var(--pal-needs-bg); color: var(--pal-needs-ink); }
+.st-label { color: var(--pal-head-ink); }
+.st-cap { border-top-color: var(--line-soft); }
+.st-headline { border-left-color: var(--pal-accent); }
+.st-table thead th { background: var(--pal-head-bg); color: var(--pal-head-ink); font-weight: 700; }
+.st-table tr.tot td { border-top-color: var(--pal-head-ink); }
+.st-table tr.sel td { background: var(--pal-head-bg); }
+.wf-row.total .wf-label b { color: var(--pal-title); }
+.st-drill summary span:first-child::before { color: var(--pal-help); }
+.st-drill[data-drill="carried"] summary { background: var(--pal-last-bg); color: var(--pal-last-ink); }

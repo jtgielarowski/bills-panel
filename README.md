@@ -3,8 +3,9 @@
 Excel side panel (`taskpane.html` + `pane.js`) and full dashboard (`dashboard.html` + `full.js`) for the
 household bills & paychecks model. Shared logic is in `core.js`.
 
-**Dashboard v4 · workbook:** `Gielarowski Financial Model (v4).xlsx`. The add-in has no file path: it reads whichever
-workbook is open in Excel, so open v4 and use Home ▸ Bills & Paychecks. Files load with cache key `?v=7`.
+**Dashboard v4.1 · workbook:** `Gielarowski Financial Model (v4).xlsx`. The add-in has no file path: it reads whichever
+workbook is open in Excel, so open v4 and use Home ▸ Bills & Paychecks. Files load with cache key `?v=20261113`
+(bump it in `dashboard.html` and `taskpane.html` on every release so browsers fetch the new files).
 
 - **Reads:** tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks,
   tblExportStory, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory,
@@ -14,8 +15,13 @@ workbook is open in Excel, so open v4 and use Home ▸ Bills & Paychecks. Files 
   (`tblRegister[Autopay bill]` = TRUE); tblRegister[Statement amount] alone (Set amount — unpaid Variable bills, never
   marks paid, never locks); tblCardLog / tblCashLog (Date, PNC balance, Note); tblPaychecks[Actual amount]; tblDebts BT
   plan; tblOther; tblMonths[Month closed?]; **tblPlanLock — append only** (see Auto-lock).
+- **Paycheck plan Actual column:** tblExportPlan[Actual start] / [Actual paid] / [Actual cash after], read by name; blank
+  (future paydays) shows "—". A tblCashLog PNC entry dated that payday already includes the paycheck → Paycheck shows "incl.".
+- **Colours:** one shared palette in `app.css` (`--pal-*`), copied from the workbook's This Month sheet; used by every view
+  and the panel.
 - **Status badges:** text = `tblRegister[Status]`, colour = `tblRegister[Badge tone]` (red / orange / yellow / blue /
-  green / purple / none). The code never works out urgency from due dates.
+  green / purple / none); the Status text splits red (OVERDUE → late) and yellow (Needs Paid → needs paid, else 6–10 days).
+  The code never works out urgency from due dates.
 - **Auto pay:** AUTO PAY tag, no Record payment / Set amount / Mark paid / Unlock; the model counts it paid on the draft date.
 - **ESTIMATE tag:** Amount type = Variable, Amount known? = FALSE and Autopay bill = FALSE.
 - **Monthly Story tab:** tblExportStory + tblExportCategory [Locked plan, Expected, Story variance] + tblRegister story
