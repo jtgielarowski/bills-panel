@@ -34,7 +34,7 @@
 
 const TABLES = ["tblExportMeta", "tblExportPlan", "tblExportCardPlan", "tblExportHistory", "tblExportCategory", "tblExportChecks", "tblExportStory",
   "tblRegister", "tblDebts", "tblCardLog", "tblCashLog", "tblOther", "tblPaychecks", "tblMonths", "tblDadHistory", "tblDadSchedule", "tblPlanLock"];
-const VERSION = "v4";   // dashboard version (shown on Model details); the cache key in the .html files is separate (?v=7)
+const VERSION = "v4.1";   // dashboard version (shown on Model details); the cache key in the .html files is separate (?v=20261113)
 const ROW_KEY = { tblRegister: "RowID", tblMonths: "Month", tblDebts: "DebtID" };
 const LOG_TABLES = ["tblCardLog", "tblCashLog", "tblOther"];
 /* A row counts as blank (and is skipped on read) when all of these columns are empty. Other tables: when every cell is empty. */
@@ -284,6 +284,16 @@ const isAutopaid = r => r.Autopaid === true;
 const TONES = ["red", "orange", "yellow", "blue", "green", "purple", "none"];
 const hasTone = r => "Badge tone" in r;
 const toneOf = r => TONES.includes(r["Badge tone"]) ? r["Badge tone"] : "none";
+/* Colour on the This Month sheet's palette (app.css --pal-*). Badge tone has fewer colours than the sheet, so the
+   workbook's own Status text splits two of them: red = "OVERDUE…" → late, else due today/tomorrow; yellow =
+   "Needs Paid…" → needs paid, else due in 6–10 days. Text only — still no date math here. Counts keep using toneOf. */
+const PAL = { red: "today", orange: "soon", yellow: "near", blue: "planned", green: "paid", purple: "balance", none: "none" };
+const palOf = r => {
+  const t = toneOf(r), s = String(r.Status || "");
+  if (t === "red" && s.startsWith("OVERDUE")) return "late";
+  if (t === "yellow" && s.startsWith("Needs Paid")) return "needs";
+  return PAL[t];
+};
 const isPaid = r => !!r.Applies && (hasTone(r) ? toneOf(r) === "green"
   : isVal(r.Status) ? String(r.Status).startsWith("Paid") : (isAutopaid(r) || (r.Remaining <= 0 && (+r["Paid total"] || 0) > 0)));
 /* ---- Auto pay (v4): the bank drafts it; the model counts it paid on the draft date. Shown, never written to. */
@@ -302,7 +312,7 @@ const autoTag = r => isAutoBill(r) ? `<span class="tag autopay" title="Auto pay:
 const reg = () => DB.tblRegister;
 function status(r) {
   if (!r.Applies) return { t: "Not needed", c: "muted" };
-  if (hasTone(r)) return { t: isVal(r.Status) ? String(r.Status) : "—", c: `t-${toneOf(r)}`, tone: toneOf(r) };
+  if (hasTone(r)) return { t: isVal(r.Status) ? String(r.Status) : "—", c: `t-${toneOf(r)} p-${palOf(r)}`, tone: toneOf(r) };
   const flag = r.Source === "Debt" ? (debtsById[r.ItemID] || {}).Flag : "";
   if (r.Source === "Debt" && !r["Paid date"] && flag === "Needs Friday balance") return { t: "Enter balance", c: "info" };
   if (isPaid(r)) return { t: "Paid", c: "paid" };
@@ -363,7 +373,8 @@ const storyRow = vm => DB.tblExportStory.find(s => s.Month === vm) || null;
 /* Status marks: round, read-only badges (they tick themselves) — deliberately unlike checkboxes. */
 const statusMark = x => `<span class="smark ${x.on ? "on" : x.step ? "step" : ""}" title="Fills in automatically" aria-label="${x.on ? "Done" : x.step ? "Your step" : "Not done yet"}">${x.on ? "✓" : x.step ? "→" : ""}</span>`;
 /* Key for the due-date colours (same scale in the panel, the full view and the This Month sheet). */
-const statusKey = () => `<div class="stkey" aria-label="What the colours mean"><span>Colours:</span><span class="pill st t-red">Overdue or due within ${+META.soonRedDays || 1} day</span><span class="pill st t-orange">Due in ${(+META.soonRedDays || 1) + 1}–${META.soonOrangeDays} days</span><span class="pill st t-yellow">Due within ${META.soonYellowDays} days, or scheduled</span><span class="pill st t-blue">Auto pay</span><span class="pill st t-purple">Enter card balance</span><span class="pill st t-none">Upcoming</span><span class="pill st t-green">Paid</span></div>`;
+const statusKey = () => { const r = +META.soonRedDays || 1, o = +META.soonOrangeDays, y = +META.soonYellowDays;
+  return `<div class="stkey" aria-label="What the colours mean"><span>Colours:</span><span class="pill st t-red p-late">Overdue</span><span class="pill st t-red p-today">Due within ${r} day${r === 1 ? "" : "s"}</span><span class="pill st t-orange p-soon">Due in ${r + 1}–${o} days</span><span class="pill st t-yellow p-near">Due in ${o + 1}–${y} days</span><span class="pill st t-yellow p-needs">Needs paid (scheduled)</span><span class="pill st t-blue p-planned">Auto pay</span><span class="pill st t-purple p-balance">Enter card balance</span><span class="pill st t-none">Upcoming</span><span class="pill st t-green p-paid">Paid</span></div>`; };
 const keyLine = () => `<p class="keyline"><span><i class="k-in"></i>You type here</span><span><i class="smark on">✓</i>Fills in automatically</span><span>🔒 Saved — unlock to change</span></p>`;
 
 /* Checklists (panel and full view) */

@@ -7,6 +7,7 @@ function render() {
   $("#sampleBanner").hidden = source.kind !== "sample";
   $("#closeFull").hidden = source.kind !== "dialog";
   const v = { month: viewMonth, friday: viewFriday, spending: viewSpending, budget: viewBudget, story: viewStory, debts: viewDebts, details: viewDetails }[state.view];
+  $("#app").dataset.view = state.view;   // lets app.css style one view (Monthly Story) without touching the others
   $("#app").innerHTML = v();
   if (state.view === "month") drawCashBuild();
   if (state.view === "story") drawStoryTrend();
@@ -115,18 +116,27 @@ function slot(p) {
   // When the PNC entry already includes this paycheck, the engine shows Money in = 0. Back the paycheck out so the column adds up.
   const inBal = pl && received && !(+pl["Money in"]);
   const start = pl ? after - (+pl["Money in"] || 0) + (+pl["Total out"] || 0) - (inBal ? p.amount : 0) : null;
-  const st = !pl ? (p.date < META.currentPayday ? ["muted", "Done — see Actual"] : ["muted", "Beyond the look-ahead"])
+  // Actual column = tblExportPlan[Actual start] / [Actual paid] / [Actual cash after], read by name. Blank or missing (future paydays) → "—".
+  const av = col => pl && isVal(pl[col]) ? +pl[col] : null;
+  const aStart = av("Actual start"), aPaid = av("Actual paid"), aAfter = av("Actual cash after");
+  // A PNC entry dated this payday already includes the paycheck (it's in Actual start), so it isn't added again.
+  const pnc = aStart !== null && DB.tblCashLog.some(c => c.Date === p.date && isVal(c["PNC balance"]));
+  const stillToPay = pl ? +pl["Total out"] || 0 : 0;
+  const aBills = pl ? (aPaid !== null ? money(aPaid) : "—") : received ? money(actual) : "—";
+  const st = !pl ? (p.date < META.currentPayday ? ["closed", "Done — see Actual"] : ["muted", "Beyond the look-ahead"])
     : after < META.cushion ? ["short", `Short by ${money(META.cushion - after, 0)}`] : ["", `OK · ${money(after - META.cushion, 0)} above cushion`];
   const nBills = pl ? reg().filter(r => r["Planned date"] === p.date && r.Remaining > 0).length : null;
+  const notes = [pnc ? `Your PNC entry of ${money(aStart)} already includes this paycheck.` : "",
+    aAfter !== null && stillToPay >= 0.005 ? `Cash after also takes off ${money(stillToPay)} still to pay.` : ""].filter(Boolean).join(" ");
   return `<div class="slot">
     <div class="slot-head ${who}"><b>${fmtD(p.date)}</b><span class="who ${who}">${esc(peopleLabel(p.people))}</span></div>
     <table><thead><tr><th></th><th>Plan</th><th>Actual</th></tr></thead><tbody>
-      <tr><td>Starting cash</td><td>${pl ? money(start) : "—"}</td><td>—</td></tr>
-      <tr><td>+ Paycheck</td><td>${money(p.amount)}</td><td>${received ? money(p.amount) : "—"}</td></tr>
-      <tr><td>− Bills${nBills !== null ? ` (${nBills})` : ""}</td><td>${pl ? money(out) : "—"}</td><td>${money(actual)}</td></tr>
-      <tr class="total"><td>Cash after</td><td>${pl ? money(after) : "—"}</td><td>—</td></tr>
+      <tr><td>Starting cash</td><td>${pl ? money(start) : "—"}</td><td>${aStart !== null ? money(aStart) : "—"}</td></tr>
+      <tr><td>+ Paycheck</td><td>${money(p.amount)}</td><td>${pnc ? `<span class="incl" title="Already in your PNC balance for this payday, so it isn't added again">incl.</span>` : received ? money(p.amount) : "—"}</td></tr>
+      <tr><td>− Bills${nBills !== null ? ` (${nBills})` : ""}</td><td>${pl ? money(out) : "—"}</td><td>${aBills}</td></tr>
+      <tr class="total"><td>Cash after</td><td>${pl ? money(after) : "—"}</td><td>${aAfter !== null ? money(aAfter) : "—"}</td></tr>
     </tbody></table>
-    ${inBal ? `<div class="b-detail" style="padding:0 2px 6px">Your PNC entry of ${money(start + p.amount)} already includes this paycheck.</div>` : ""}
+    ${notes ? `<div class="b-detail" style="padding:0 2px 6px">${notes}</div>` : ""}
     <div class="slot-status ${st[0]}">${st[1]}</div>
   </div>`;
 }
@@ -355,7 +365,7 @@ function viewBudget() {
       <td class="r money">${c["Variance on paid bills"] ? (c["Variance on paid bills"] > 0 ? "+" : "") + money(c["Variance on paid bills"]) : "—"}</td></tr>`).join("")}
     </tbody></table></div>
     ${sel ? `<h3 style="margin:18px 0 8px;font-size:15px">${esc(sel)} · bills</h3><div class="table-wrap"><table class="data"><thead><tr><th>Bill</th><th>Status</th><th class="r">Budget</th><th class="r">Paid</th><th class="r">Difference</th><th>Reason</th></tr></thead><tbody>
-      ${drill.map(r => { const st = status(r); return `<tr><td>${esc(r.Bill)}<div class="hint">${esc(r.Detail || "")}</div></td><td><span class="pill st ${st.c}">${esc(st.t)}</span></td><td class="r money">${money(r.Budget)}</td><td class="r money">${r["Paid total"] ? money(r["Paid total"]) : "—"}</td><td class="r money">${r.Variance === null || r.Variance === undefined ? "—" : (r.Variance > 0 ? "+" : "") + money(r.Variance)}</td><td>${esc(r["Reason if different"] || (r["Needs reason"] === true ? "Needs a reason" : ""))}</td></tr>`; }).join("")}
+      ${drill.map(r => { const st = status(r); return `<tr><td>${esc(r.Bill)}<div class="hint">${esc(r.Detail || "")}</div></td><td><span class="pill st ${st.c}">${esc(st.t)}</span></td><td class="r money">${money(r.Budget)}</td><td class="r money">${r["Paid total"] ? money(r["Paid total"]) : "—"}</td><td class="r money">${r.Variance === null || r.Variance === undefined ? "—" : (r.Variance > 0 ? "+" : "") + money(r.Variance)}</td><td${r["Needs reason"] === true ? ' class="over"' : ""}>${esc(r["Reason if different"] || (r["Needs reason"] === true ? "Needs a reason" : ""))}</td></tr>`; }).join("")}
     </tbody></table></div>` : ""}
   </section>
   <section class="card card-pad">
@@ -455,7 +465,7 @@ function storyDrill(key, title, hint, rows, head, cell, total) {
   const open = !!state.storyOpen[key];
   return `<details class="st-drill" data-drill="${key}" ${open ? "open" : ""}><summary><span>${title}</span><span class="hint">${rows.length ? `${rows.length} bill${rows.length === 1 ? "" : "s"}${total !== undefined ? ` · ${money(total)}` : ""}` : "none"}</span></summary>
     <p class="hint" style="margin:6px 0 8px">${hint}</p>
-    ${rows.length ? `<div class="table-wrap"><table class="data st-table"><thead><tr>${head.map(h => `<th class="${/Planned|Actual|Amount|Variance|Paid$/.test(h) ? "r" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cell(r).map(c => `<td${c.startsWith("<!--r-->") ? ' class="r money"' : ""}>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="empty">None this month.</p>`}
+    ${rows.length ? `<div class="table-wrap"><table class="data st-table"><thead><tr>${head.map(h => `<th class="${/Planned|Actual|Amount|Variance|Paid$/.test(h) ? "r" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cell(r).map(c => `<td${c.startsWith("<!--r-->") ? ' class="r money"' : c.startsWith("<!--over-->") ? ' class="over"' : ""}>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="empty">None this month.</p>`}
   </details>`;
 }
 const R = v => `<!--r-->${money(v)}`;
@@ -515,7 +525,7 @@ function viewStory() {
 
   <section class="card card-pad st-card"><div class="st-h"><h3>4 · Drill-downs — the bills behind every number</h3></div>
     ${storyDrill("variances", "Variances — where it differs from the locked plan", "Largest first. Why = Variance reason from the workbook.", variances,
-      ["Bill", "Category", "Planned", actLabel, "Variance", "Why"], r => [billName(r), esc(r.Category), R(r["Locked plan"]), R(r.Expected), `<!--r--><span class="${tone(r["Story variance"])}">${sgn(r["Story variance"], 2)}</span>`, esc(r["Variance reason"] || "")])}
+      ["Bill", "Category", "Planned", actLabel, "Variance", "Why"], r => [billName(r), esc(r.Category), R(r["Locked plan"]), R(r.Expected), `<!--r--><span class="${tone(r["Story variance"])}">${sgn(r["Story variance"], 2)}</span>`, `${r["Needs reason"] === true ? "<!--over-->" : ""}${esc(r["Variance reason"] || "")}`])}
     ${storyDrill("carried", "Carried in — last month's bills paid with this month's cash", "Bills from an earlier month whose cash comes out this month.", carried,
       ["Bill", "Bill's month", "Due", "Amount", "Status"], r => [billName(r), mShort(r.Month), shortD(r["Due date"]), R(r.Expected), `${stPill(r)}<div class="hint">${esc(r["Pay from"] || "")}</div>`], sum(carried, r => r.Expected))}
     ${storyDrill("pushed", "Pushed to next month — this month's bills paid with next month's cash", "This month's bills whose cash comes out next month.", pushed,
@@ -643,8 +653,8 @@ function viewDetails() {
     ${DB.tblExportChecks.filter(c => isVal(c.Check)).map((c, i) => `<tr><td class="hint">${i + 1}</td><td>${esc(c.Check)}</td><td><span class="pill ${c.Result === "PASS" ? "paid" : c.Result === "WARN" ? "warn" : "late"}">${esc(c.Result)}</span></td><td class="hint">${esc(c["What to do"])}</td></tr>`).join("")}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Paycheck planner</h2><span class="hint">tblExportPlan · must-pays placed on the latest safe payday, then card extras from truly free cash</span></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Payday</th><th class="r">Money in</th><th class="r">Must-pay out</th><th class="r">Card extras</th><th class="r">Total out</th><th class="r">Cash after</th><th>Below cushion</th></tr></thead><tbody>
-    ${plan.map(p => `<tr><td>${fmtD(p.Payday)}</td><td class="r money">${money(p["Money in"])}</td><td class="r money">${money(p["Must-pay out"])}</td><td class="r money">${money(p["Card extras"])}</td><td class="r money">${money(p["Total out"])}</td><td class="r money">${money(p["Cash after"])}</td><td>${p["Below cushion"] === true ? `<span class="pill late">Yes</span>` : "No"}</td></tr>`).join("")}
+    <div class="table-wrap"><table class="data"><thead><tr><th>Payday</th><th class="r">Money in</th><th class="r">Must-pay out</th><th class="r">Card extras</th><th class="r">Total out</th><th class="r">Cash after</th><th>Below cushion</th><th class="r">Actual start</th><th class="r">Actual paid</th><th class="r">Actual cash after</th></tr></thead><tbody>
+    ${plan.map(p => `<tr><td>${fmtD(p.Payday)}</td><td class="r money">${money(p["Money in"])}</td><td class="r money">${money(p["Must-pay out"])}</td><td class="r money">${money(p["Card extras"])}</td><td class="r money">${money(p["Total out"])}</td><td class="r money">${money(p["Cash after"])}</td><td>${p["Below cushion"] === true ? `<span class="pill late">Yes</span>` : "No"}</td>${["Actual start", "Actual paid", "Actual cash after"].map(c => `<td class="r money">${isVal(p[c]) ? money(p[c]) : "—"}</td>`).join("")}</tr>`).join("")}
     </tbody></table></div>
     <p class="note">Start cash ${money(META.startCash)} as of ${fmtD(META.anchor)} (${META.hasBankEntry ? "your PNC entry" : "opening cash"}). Look-ahead ends ${fmtD(META.horizonEnd)}. Pay-ahead ${META.payAheadDays} days.</p></section>
   <section class="card card-pad"><div class="card-head"><h2>Card payments placed (highest APR first)</h2></div>
@@ -653,8 +663,11 @@ function viewDetails() {
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Data connection</h2><span class="pill info">Dashboard ${VERSION}</span></div>
     <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Dashboard ${VERSION}, built for <b>Gielarowski Financial Model (v4).xlsx</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblExportStory, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule and tblPlanLock. Writes only: tblRegister payment input columns (matched by RowID) where Record allowed = TRUE or to correct a saved payment — never an auto pay row; tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; tblMonths[Month closed?]; and <b>tblPlanLock — new rows only</b> (values, never formulas; existing lock rows are never edited or deleted).</p></section>
-  <section class="card card-pad"><div class="card-head"><h2>What's new in ${VERSION}</h2><span class="hint">For Gielarowski Financial Model (v4) · Lists &amp; Notes change log, Oct 31, 2026</span></div>
+  <section class="card card-pad"><div class="card-head"><h2>What's new in ${VERSION}</h2><span class="hint">For Gielarowski Financial Model (v4) · v4.1 Nov 13, 2026 · v4 Oct 31, 2026</span></div>
     <ol class="changes">
+      <li><b>v4.1 · Paycheck plan Actual column:</b> Starting cash = tblExportPlan[Actual start], Bills = [Actual paid], Cash after = [Actual cash after], read by name ("—" when blank, e.g. future paydays). When a PNC entry is dated that payday, the Paycheck row shows "incl." because Actual start already includes it.</li>
+      <li><b>v4.1 · This Month sheet colours everywhere:</b> one shared palette (app.css --pal-*) for status pills, table headers, the paycheck plan and the Monthly Story. Badge tone picks the colour; the Status text splits red (OVERDUE = late) and yellow (Needs Paid = needs paid, else 6–10 days blue).</li>
+      <li><b>v4.1 · Monthly Story restyled</b> to the sheet: IBM Plex Sans, 18px section titles, grey table headers, accent green badges and totals. Data and calculations unchanged.</li>
       <li><b>Status badges come from the workbook.</b> Text = tblRegister[Status], colour = tblRegister[Badge tone] (red / orange / yellow / blue / green / purple / none). No due-date maths in the dashboard — e.g. a bill with Pay with set shows yellow "Needs Paid - Paying with Fri 11/6 Paycheck". Same badge in Pay this Friday, the bill list, the panel and Monthly Story.</li>
       <li><b>Auto pay.</b> Rows with Autopay bill = TRUE show a blue AUTO PAY tag and no Record payment / Set amount / Mark paid / Unlock. They stay visible and are never written to; the model counts them paid on the draft date. Record payment, Set amount and Mark paid appear only where Record allowed = TRUE (a saved, non-auto pay payment can still be unlocked).</li>
       <li><b>ESTIMATE tag</b> only when Amount type = Variable, Amount known? = FALSE and Autopay bill = FALSE.</li>
