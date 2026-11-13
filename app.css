@@ -586,3 +586,9 @@ td.over { background: var(--pal-over-bg); }
 .wf-row.total .wf-label b { color: var(--pal-title); }
 .st-drill summary span:first-child::before { color: var(--pal-help); }
 .st-drill[data-drill="carried"] summary { background: var(--pal-last-bg); color: var(--pal-last-ink); }
+
+/* ===================================================================== v4.2 (Nov 13, 2026) — plan vs actual note, payment gate */
+.pv-note { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; color: var(--ink-2); }
+.pv-note b { color: var(--pal-title); font-weight: 600; }
+.pv-none { margin: 4px 0 0; font-size: 12px; color: var(--pal-help); }
+.btn.gate { background: var(--pal-needs-bg); color: var(--pal-needs-ink); border-color: transparent; font-weight: 600; white-space: nowrap; }

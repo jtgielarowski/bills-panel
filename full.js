@@ -107,36 +107,92 @@ const midweekOf = vm => { const h = DB.tblExportHistory.find(x => x.Month === vm
 const midweekSub = v => v === null ? "Needs two Friday PNC entries" : v > 0.005 ? "spent more than recorded" : v < -0.005 ? "more cash than expected" : "matches what was recorded";
 const kpi = (label, value, sub, cap, cls = "") => `<div class="card kpi"><div class="kpi-label">${label}</div><div class="kpi-value ${cls}">${value}</div><div class="kpi-sub">${sub}</div><div class="kpi-cap">${cap}</div></div>`;
 
+/* Plan vs actual for one payday (v4.2).
+   Plan   = the snapshot saved at that payday's Friday update (tblPaydayPlan: START, PAYCHECK, one row per planned bill);
+            no snapshot → the engine's chained plan (tblExportPlan) for paydays still ahead, "—" for paydays already done.
+   Actual = tblExportPlan[Actual start / Actual paid / Actual cash after] while the payday is in the plan; once it has
+            dropped off (a later PNC entry exists), the next Friday's tblCashLog row closes the week:
+            start = PNC balance that payday, bills = next row [Payments since], cash after = next PNC − next [Paychecks since]. */
+function paydayActual(p, pl) {
+  const av = col => pl && isVal(pl[col]) ? +pl[col] : null;
+  if (av("Actual start") !== null) return { start: av("Actual start"), paid: av("Actual paid"), after: av("Actual cash after"), live: true };
+  const c = cashOn(p.date), next = DB.tblCashLog.find(x => x["Previous date"] === p.date && isVal(x["PNC balance"]));
+  if (!c || !next) return null;
+  return { start: +c["PNC balance"], paid: +next["Payments since"] || 0, after: round2(+next["PNC balance"] - (+next["Paychecks since"] || 0)), during: +next["Mid-week spend"] || 0, live: false };
+}
+/* Why actual differs from the saved plan: one bullet per kind of action. For the current payday, "still to pay" uses
+   tblRegister[Payday amount] (what the engine still has on this payday). The bullet amounts add up to plan − actual. */
+function planVsActual(p, snap, act) {
+  const next = paydays.find(x => x.date > p.date), end = next ? next.date : "9999-12-31", cur = act.live;
+  const inWin = d => isVal(d) && d >= p.date && d < end;
+  const planned = {}, items = {};
+  snap.filter(x => x.Key !== "START" && x.Key !== "PAYCHECK").forEach(x => { planned[x.Key] = (planned[x.Key] || 0) + (+x["Planned amount"] || 0); items[x.Key] = x.Item; });
+  const byId = Object.fromEntries(reg().map(r => [r.RowID, r]));
+  const ids = new Set([...Object.keys(planned), ...reg().map(r => r.RowID)]);
+  const early = [], added = [], diff = [], still = [], skipped = [];
+  const nm = id => esc(byId[id] ? byId[id].Bill : items[id] || id);
+  ids.forEach(id => {
+    const r = byId[id], pl = planned[id] || 0;
+    const paid = r ? round2((inWin(effDate(r)) ? effAmt(r) : 0) + (inWin(r["Extra paid date"]) ? +r["Extra paid amount"] || 0 : 0)) : 0;
+    const left = cur && r ? round2(+r["Payday amount"] || 0) : 0;
+    if (!pl) { if (paid > 0.005) early.push([id, paid]); if (left > 0.005) added.push([id, left]); return; }
+    const delta = round2(paid + left - pl);
+    if (left > 0.005) still.push([id, left]);
+    if (Math.abs(delta) < 0.005) return;
+    if (paid < 0.005 && left < 0.005) skipped.push([id, pl]); else diff.push([id, paid + left, pl, delta]);
+  });
+  const list = (xs, f) => xs.sort((a, b) => b[1] - a[1]).map(f).join(", ");
+  const tot = xs => money(round2(sum(xs, x => x[1])));
+  const autoNote = id => byId[id] && isAutoBill(byId[id]) ? ` (auto pay ${shortD(byId[id]["Due date"])})` : "";
+  const st = snap.find(x => x.Key === "START"), pc = snap.find(x => x.Key === "PAYCHECK");
+  const gap = st ? round2((+st["Planned amount"] || 0) + (+pc?.["Planned amount"] || 0) - act.start) : 0;
+  const other = round2(sum(DB.tblOther.filter(o => o.Status === "Spent" && inWin(o.Date)), o => o.Amount));
+  const b = [];
+  if (early.length) b.push(`<b>Paid early (not in this payday's plan):</b> ${list(early, ([id, v]) => `${nm(id)} ${money(v)}`)}${early.length > 1 ? ` — ${tot(early)}` : ""}`);
+  if (added.length) b.push(`<b>Added to this payday after the plan:</b> ${list(added, ([id, v]) => `${nm(id)} ${money(v)}`)}`);
+  diff.forEach(([id, v, pl, d]) => b.push(`<b>Paid ${d > 0 ? "more" : "less"} than planned:</b> ${nm(id)} ${money(v)} vs ${money(pl)} planned (${d > 0 ? "+" : "−"}${money(Math.abs(d))})`));
+  if (skipped.length) b.push(`<b>Planned but not paid this payday:</b> ${list(skipped, ([id, v]) => `${nm(id)} ${money(v)}`)}`);
+  if (still.length) b.push(`<b>Still to pay:</b> ${list(still, ([id, v]) => `${nm(id)} ${money(v)}${autoNote(id)}`)}`);
+  if (Math.abs(gap) >= 0.005) b.push(gap > 0 ? `<b>Mid-week spending:</b> PNC was ${money(gap)} below what the plan expected at the Friday update.` : `<b>More cash than expected:</b> PNC was ${money(-gap)} above what the plan expected at the Friday update.`);
+  if (other >= 0.005) b.push(`<b>One-off expenses:</b> ${money(other)} (Other Expenses)`);
+  if (!cur && Math.abs(act.during) >= 0.005) b.push(act.during > 0 ? `<b>Mid-week spending during the week:</b> ${money(act.during)}` : `<b>More cash than expected during the week:</b> ${money(-act.during)}`);
+  return b.length ? `<ul class="pv-note">${b.map(x => `<li>${x}</li>`).join("")}</ul>` : `<ul class="pv-note"><li>Went to plan.</li></ul>`;
+}
 function slot(p) {
   const pl = planFor(p.date), who = whoOf(p);
   const next = paydays.find(x => x.date > p.date);
   const actual = paidInRange(p.date, next ? new Date(D(next.date) - 864e5).toISOString().slice(0, 10) : isoOf(monthKey(p.date), daysInMonth(monthKey(p.date))));
-  const out = pl ? planOut(pl) : null, after = pl ? pl["Cash after"] : null;
+  const after = pl ? pl["Cash after"] : null;
   const received = p.date <= META.asOf;
-  // When the PNC entry already includes this paycheck, the engine shows Money in = 0. Back the paycheck out so the column adds up.
+  const snap = snapOf(p.date), sv = k => { const x = snap.find(s => s.Key === k); return x ? +x["Planned amount"] || 0 : null; };
+  const snapBills = snap.filter(s => s.Key !== "START" && s.Key !== "PAYCHECK");
+  // Plan column: the saved snapshot if there is one, else the engine's chained plan (paydays ahead).
   const inBal = pl && received && !(+pl["Money in"]);
-  const start = pl ? after - (+pl["Money in"] || 0) + (+pl["Total out"] || 0) - (inBal ? p.amount : 0) : null;
-  // Actual column = tblExportPlan[Actual start] / [Actual paid] / [Actual cash after], read by name. Blank or missing (future paydays) → "—".
-  const av = col => pl && isVal(pl[col]) ? +pl[col] : null;
-  const aStart = av("Actual start"), aPaid = av("Actual paid"), aAfter = av("Actual cash after");
-  // A PNC entry dated this payday already includes the paycheck (it's in Actual start), so it isn't added again.
-  const pnc = aStart !== null && DB.tblCashLog.some(c => c.Date === p.date && isVal(c["PNC balance"]));
-  const stillToPay = pl ? +pl["Total out"] || 0 : 0;
-  const aBills = pl ? (aPaid !== null ? money(aPaid) : "—") : received ? money(actual) : "—";
+  let plan = null;
+  if (snap.length) {
+    const st = sv("START"), pay = sv("PAYCHECK") ?? p.amount, bills = round2(sum(snapBills, s => s["Planned amount"]));
+    plan = { start: st, pay, bills, n: snapBills.length, after: st === null ? null : round2(st + pay - bills) };
+  } else if (pl && !received) {   // paydays ahead: the engine's chained plan. A payday already here without a saved plan shows "—".
+    plan = { start: after - (+pl["Money in"] || 0) + (+pl["Total out"] || 0) - (inBal ? p.amount : 0), pay: p.amount, bills: planOut(pl), after,
+      n: reg().filter(r => r["Planned date"] === p.date && r.Remaining > 0).length };
+  }
+  const act = received ? paydayActual(p, pl) : null;
+  const pnc = !!act && !!cashOn(p.date);
+  const aBills = act ? money(act.paid) : received ? money(actual) : "—";
   const st = !pl ? (p.date < META.currentPayday ? ["closed", "Done — see Actual"] : ["muted", "Beyond the look-ahead"])
     : after < META.cushion ? ["short", `Short by ${money(META.cushion - after, 0)}`] : ["", `OK · ${money(after - META.cushion, 0)} above cushion`];
-  const nBills = pl ? reg().filter(r => r["Planned date"] === p.date && r.Remaining > 0).length : null;
-  const notes = [pnc ? `Your PNC entry of ${money(aStart)} already includes this paycheck.` : "",
-    aAfter !== null && stillToPay >= 0.005 ? `Cash after also takes off ${money(stillToPay)} still to pay.` : ""].filter(Boolean).join(" ");
+  let note = "";
+  if (snap.length && act) note = planVsActual(p, snap, act);
+  else if (received && !snap.length && act) note = `<p class="pv-none">Plan wasn't saved for this payday${hasSnapTable() ? "" : " (needs the v6 workbook)"}.</p>`;
   return `<div class="slot">
     <div class="slot-head ${who}"><b>${fmtD(p.date)}</b><span class="who ${who}">${esc(peopleLabel(p.people))}</span></div>
     <table><thead><tr><th></th><th>Plan</th><th>Actual</th></tr></thead><tbody>
-      <tr><td>Starting cash</td><td>${pl ? money(start) : "—"}</td><td>${aStart !== null ? money(aStart) : "—"}</td></tr>
-      <tr><td>+ Paycheck</td><td>${money(p.amount)}</td><td>${pnc ? `<span class="incl" title="Already in your PNC balance for this payday, so it isn't added again">incl.</span>` : received ? money(p.amount) : "—"}</td></tr>
-      <tr><td>− Bills${nBills !== null ? ` (${nBills})` : ""}</td><td>${pl ? money(out) : "—"}</td><td>${aBills}</td></tr>
-      <tr class="total"><td>Cash after</td><td>${pl ? money(after) : "—"}</td><td>${aAfter !== null ? money(aAfter) : "—"}</td></tr>
+      <tr><td>Starting cash</td><td>${plan && plan.start !== null ? money(plan.start) : "—"}</td><td>${act ? money(act.start) : "—"}</td></tr>
+      <tr><td>+ Paycheck</td><td>${money(plan ? plan.pay : p.amount)}</td><td>${pnc ? `<span class="incl" title="Already in your PNC balance for this payday, so it isn't added again">incl.</span>` : received ? money(p.amount) : "—"}</td></tr>
+      <tr><td>− Bills${plan ? ` (${plan.n})` : ""}</td><td>${plan ? money(plan.bills) : "—"}</td><td>${aBills}</td></tr>
+      <tr class="total"><td>Cash after</td><td>${plan && plan.after !== null ? money(plan.after) : "—"}</td><td>${act ? money(act.after) : "—"}</td></tr>
     </tbody></table>
-    ${notes ? `<div class="b-detail" style="padding:0 2px 6px">${notes}</div>` : ""}
+    ${note ? `<div class="b-detail" style="padding:0 2px 6px">${note}</div>` : ""}
     <div class="slot-status ${st[0]}">${st[1]}</div>
   </div>`;
 }
@@ -662,9 +718,12 @@ function viewDetails() {
     ${DB.tblExportCardPlan.filter(c => c.RowID).map(c => `<tr><td>${c.Block}</td><td class="mono-s">${esc(c.RowID)}</td><td class="r money">${money(c["Extra placed"])}</td><td>${esc(c["Pay-from text"])}</td></tr>`).join("") || `<tr><td colspan="4" class="hint">No card extras in the plan.</td></tr>`}
     </tbody></table></div></section>
   <section class="card card-pad"><div class="card-head"><h2>Data connection</h2><span class="pill info">Dashboard ${VERSION}</span></div>
-    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Dashboard ${VERSION}, built for <b>Gielarowski Financial Model (v4).xlsx</b>. Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblExportStory, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule and tblPlanLock. Writes only: tblRegister payment input columns (matched by RowID) where Record allowed = TRUE or to correct a saved payment — never an auto pay row; tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; tblMonths[Month closed?]; and <b>tblPlanLock — new rows only</b> (values, never formulas; existing lock rows are never edited or deleted).</p></section>
-  <section class="card card-pad"><div class="card-head"><h2>What's new in ${VERSION}</h2><span class="hint">For Gielarowski Financial Model (v4) · v4.1 Nov 13, 2026 · v4 Oct 31, 2026</span></div>
+    <p class="note" style="margin:0">Source: <b>${source.kind === "sample" ? "sample snapshot (preview)" : source.kind === "dialog" ? "live workbook, through the Excel panel" : "live workbook"}</b>. Dashboard ${VERSION}, built for <b>Gielarowski Financial Model (v6).xlsx</b> (v4 and v5 still work, without the saved payday plans). Reads tblExportMeta, tblExportPlan, tblExportCardPlan, tblExportHistory, tblExportCategory, tblExportChecks, tblExportStory, tblRegister, tblDebts, tblCardLog, tblCashLog, tblOther, tblPaychecks, tblMonths, tblDadHistory, tblDadSchedule, tblPlanLock and tblPaydayPlan (optional). Writes only: tblRegister payment input columns (matched by RowID) where Record allowed = TRUE or to correct a saved payment — never an auto pay row; tblRegister[Statement amount] alone through Set amount (unpaid Variable bills; never marks paid or locks); tblCardLog / tblCashLog input columns, matched by date (a correction replaces that Friday's row; calculated columns are never written); tblPaychecks[Actual amount]; tblDebts[BT payment mode, Fixed monthly payment]; new rows in tblOther; tblMonths[Month closed?]; <b>tblPlanLock</b> and <b>tblPaydayPlan — new rows only</b> (values, never formulas; existing rows are never edited or deleted). Payments are refused until the PNC balance is saved for that payday.</p></section>
+  <section class="card card-pad"><div class="card-head"><h2>What's new in ${VERSION}</h2><span class="hint">For Gielarowski Financial Model (v6) · v4.2 and v4.1 Nov 13, 2026 · v4 Oct 31, 2026</span></div>
     <ol class="changes">
+      <li><b>v4.2 · Plan vs actual on each payday card:</b> when the Friday update's PNC balance is saved, the panel saves that payday's plan to tblPaydayPlan (START = expected PNC before the paycheck, PAYCHECK, one row per planned bill). The card's Plan column shows it; the note lists what changed — paid early, paid more or less, not paid, still to pay, mid-week spending, one-off expenses.</li>
+      <li><b>v4.2 · Payment gate:</b> Record payment / Mark paid wait until the PNC balance is saved for the latest payday on or before the payment date ("Friday update first"). The workbook enforces the same rule on Paid date / Extra paid date.</li>
+      <li><b>v4.2 · Past paydays keep their Actual column</b> from the next Friday's tblCashLog row (Payments since, Paychecks since, Mid-week spend).</li>
       <li><b>v4.1 · Paycheck plan Actual column:</b> Starting cash = tblExportPlan[Actual start], Bills = [Actual paid], Cash after = [Actual cash after], read by name ("—" when blank, e.g. future paydays). When a PNC entry is dated that payday, the Paycheck row shows "incl." because Actual start already includes it.</li>
       <li><b>v4.1 · This Month sheet colours everywhere:</b> one shared palette (app.css --pal-*) for status pills, table headers, the paycheck plan and the Monthly Story. Badge tone picks the colour; the Status text splits red (OVERDUE = late) and yellow (Needs Paid = needs paid, else 6–10 days blue).</li>
       <li><b>v4.1 · Monthly Story restyled</b> to the sheet: IBM Plex Sans, 18px section titles, grey table headers, accent green badges and totals. Data and calculations unchanged.</li>
